@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "specimen_id": null,
+  "measurement_units": "field_suffixes_v1",
+  "safety_note": "Only load the specimen within verified equipment and material safety limits. If 30 N is unsafe, stop and leave the axial trial incomplete.",
+  "geometry": {
+    "mass_kg": [null, null],
+    "length_m": [null, null],
+    "width_m": [null, null],
+    "thickness_m": [null, null],
+    "natural_arch_height_m": [null, null],
+    "balance_offset_m": [null, null]
+  },
+  "axial_tension": {
+    "gauge_length_m": null,
+    "trials": [
+      {
+        "points": [
+          {"load_n": 0.0, "extension_m": null, "hold_s": 5.0},
+          {"load_n": 10.0, "extension_m": null, "hold_s": 5.0},
+          {"load_n": 20.0, "extension_m": null, "hold_s": 5.0},
+          {"load_n": 30.0, "extension_m": null, "hold_s": 5.0}
+        ],
+        "residual_extension_m": null
+      },
+      {
+        "points": [
+          {"load_n": 0.0, "extension_m": null, "hold_s": 5.0},
+          {"load_n": 10.0, "extension_m": null, "hold_s": 5.0},
+          {"load_n": 20.0, "extension_m": null, "hold_s": 5.0},
+          {"load_n": 30.0, "extension_m": null, "hold_s": 5.0}
+        ],
+        "residual_extension_m": null
+      }
+    ]
+  },
+  "three_point_bending": {
+    "support_span_m": null,
+    "trials": [
+      {
+        "points": [
+          {"load_n": 0.0, "center_deflection_m": null},
+          {"load_n": null, "center_deflection_m": null},
+          {"load_n": null, "center_deflection_m": null},
+          {"load_n": null, "center_deflection_m": null}
+        ],
+        "residual_deflection_m": null
+      },
+      {
+        "points": [
+          {"load_n": 0.0, "center_deflection_m": null},
+          {"load_n": null, "center_deflection_m": null},
+          {"load_n": null, "center_deflection_m": null},
+          {"load_n": null, "center_deflection_m": null}
+        ],
+        "residual_deflection_m": null
+      }
+    ]
+  },
+  "torsion": {
+    "gauge_length_m": null,
+    "trials": [
+      {
+        "points": [
+          {"torque_nm": 0.0, "angle_rad": null},
+          {"torque_nm": null, "angle_rad": null},
+          {"torque_nm": null, "angle_rad": null}
+        ],
+        "residual_angle_rad": null
+      },
+      {
+        "points": [
+          {"torque_nm": 0.0, "angle_rad": null},
+          {"torque_nm": null, "angle_rad": null},
+          {"torque_nm": null, "angle_rad": null}
+        ],
+        "residual_angle_rad": null
+      }
+    ]
+  },
+  "free_decay": {
+    "sample_rate_hz": 60.0,
+    "trials": [
+      {
+        "initial_displacement_m": null,
+        "peak_time_s": [null, null, null, null],
+        "peak_displacement_m": [null, null, null, null],
+        "stable_time_s": null
+      },
+      {
+        "initial_displacement_m": null,
+        "peak_time_s": [null, null, null, null],
+        "peak_displacement_m": [null, null, null, null],
+        "stable_time_s": null
+      }
+    ]
+  },
+  "friction": {
+    "shelf_critical_angle_deg": [null, null, null],
+    "gripper_pad_critical_angle_deg": [null, null, null]
+  }
+}

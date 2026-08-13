@@ -1,0 +1,53 @@
+# ===== 公开仓库：本机密钥、专有资料与内部复盘 =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.whl
+CruzrS2/
+MD文档/
+cruzr_mujoco_sim/ECU_PIPELINE.md
+双物料线_pi05训练前评估与数据采集建议.md
+cruzr_mujoco_sim/ECU_SMOKE_REPORT.md
+cruzr_mujoco_sim/docs/CRUZR_S2_SDK_ALIGNMENT.md
+cruzr_mujoco_sim/docs/双物体两趟数据采集修改总结_2026-08-05.md
+
+# ===== 数据产物：5.3G / 40万文件，绝不入库 =====
+cruzr_mujoco_sim/out/
+
+# ===== 环境 / 权重 =====
+envs/
+pretrained/
+smoke_data/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+
+# ===== 大体积网格资源（132M）=====
+cruzr_mujoco_sim/assets/
+
+# ===== 生成的场景文件 =====
+**/e2e_dual_scene_*.xml
+**/cruzr_newusd_scene.xml
+**/cruzr_pgc140.xml
+
+# ===== 压缩包 / 媒体 / 数据 =====
+*.zip
+*.mp4
+*.npz
+*.npy
+*.parquet
+
+# ===== Python 产物 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ===== 日志 =====
+*.log
+logs/
+runs/
