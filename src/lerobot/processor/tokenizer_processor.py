@@ -24,7 +24,9 @@ token IDs and attention masks, which are then added to the observation dictionar
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -49,6 +51,26 @@ if TYPE_CHECKING or _transformers_available:
 else:
     AutoProcessor = None
     AutoTokenizer = None
+
+
+_PALIGEMMA_DIR = "paligemma-3b-pt-224"
+_LEGACY_PALIGEMMA_PATH = Path(
+    "/workspace/GlobalHumanoidRobotChallenge_2026_Baseline/pretrained"
+) / _PALIGEMMA_DIR
+
+
+def _resolve_paligemma_tokenizer(tokenizer_name: str) -> tuple[str, bool]:
+    """Return a usable local PaliGemma tokenizer path when one is available."""
+    configured = os.environ.get("PALIGEMMA_PATH")
+    candidates = [
+        Path(configured).expanduser() if configured else None,
+        Path(__file__).resolve().parents[3] / "pretrained" / _PALIGEMMA_DIR,
+        _LEGACY_PALIGEMMA_PATH,
+    ]
+    for candidate in candidates:
+        if candidate is not None and (candidate / "tokenizer_config.json").is_file():
+            return str(candidate), True
+    return tokenizer_name, False
 
 
 @dataclass
@@ -110,9 +132,10 @@ class TokenizerProcessorStep(ObservationProcessorStep):
                 raise ImportError("AutoTokenizer is not available")
 
             if "paligemma" in self.tokenizer_name.lower():
+                tokenizer_source, is_local = _resolve_paligemma_tokenizer(self.tokenizer_name)
                 self.input_tokenizer = AutoTokenizer.from_pretrained(
-                    "/workspace/GlobalHumanoidRobotChallenge_2026_Baseline/pretrained/paligemma-3b-pt-224",
-                    local_files_only=True
+                    tokenizer_source,
+                    local_files_only=is_local,
                 )
             else:
                 self.input_tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)

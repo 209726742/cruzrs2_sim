@@ -26,7 +26,7 @@ from cruzr_s2_sdk_contract import (  # noqa: E402
     SDK_TASK_HEAD_POSE_RAD,
     audit_sdk_episode,
 )
-from shelf_e2e_source import validate_source_dir  # noqa: E402
+from shelf_e2e_source import object_model_errors, validate_source_dir  # noqa: E402
 
 
 class ShelfE2ESourceSdkTest(unittest.TestCase):
@@ -102,6 +102,9 @@ class ShelfE2ESourceSdkTest(unittest.TestCase):
             "policy_episode_end": endpoint,
             "safety_home": {
                 "recorded_in_policy_episode": False,
+                "tracking_passed": True,
+                "release_passed": True,
+                "strip_contact_force_peak_n": 0.0,
                 "objects_stable": True,
             },
         }
@@ -154,6 +157,29 @@ class ShelfE2ESourceSdkTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(info["collection_profile"], SDK_COLLECTION_PROFILE)
         self.assertEqual(tuple(info["cameras"]), SDK_CAMERAS)
+
+    def test_flex_source_requires_measured_approved_model(self):
+        synthetic = {
+            "task_version": "dual_two_trip_flex_v1",
+            "object_model": {
+                "task_version": "dual_two_trip_flex_v1",
+                "formal_collection_allowed": False,
+                "source_measurement_provenance": {"measured": False},
+            },
+        }
+        errors = object_model_errors(synthetic)
+        self.assertTrue(any("synthetic" in error for error in errors))
+        measured = {
+            "task_version": "dual_two_trip_flex_v1",
+            "object_model": {
+                "task_version": "dual_two_trip_flex_v1",
+                "formal_collection_allowed": True,
+                "source_measurement_provenance": {"measured": True},
+                "source_parameter_sha256": "a" * 64,
+                "template_sha256": "b" * 64,
+            },
+        }
+        self.assertEqual(object_model_errors(measured), [])
 
     def test_camera_order_and_timestamp_sidecar_are_hard_gates(self):
         self.meta["cameras"] = {

@@ -259,7 +259,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # Wait for all processes to finish policy creation before continuing
     accelerator.wait_for_everyone()
 
-    dataset_state_dims = dataset.meta.features["observation.state"].shape[0]
+    state_feature = dataset.meta.features["observation.state"]
+    state_shape = (
+        state_feature["shape"] if isinstance(state_feature, dict) else state_feature.shape
+    )
+    dataset_state_dims = int(state_shape[0])
     state_n_dims = (
         int(_STATE_N_DIMS_OVERRIDE)
         if _STATE_N_DIMS_OVERRIDE is not None
@@ -315,9 +319,11 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         **postprocessor_kwargs,
     )
 
-    # A base checkpoint does not contain a task-specific state slicer. Preserve
-    # the dataset contract unless an explicit compatibility override was given.
-    if cfg.policy.pretrained_path is not None:
+    # A base checkpoint may not contain a task-specific state slicer. Preserve
+    # the dataset contract without duplicating a slicer restored on resume.
+    if cfg.policy.pretrained_path is not None and not any(
+        isinstance(step, StateSlicerProcessorStep) for step in preprocessor.steps
+    ):
         preprocessor.steps.insert(0, StateSlicerProcessorStep(n_dims=state_n_dims))
 
     if is_main_process:

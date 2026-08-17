@@ -48,6 +48,9 @@ def valid_quality_records(num_frames=300):
         "policy_episode_end": dict(endpoint),
         "safety_home": {
             "recorded_in_policy_episode": False,
+            "tracking_passed": True,
+            "release_passed": True,
+            "strip_contact_force_peak_n": 0.0,
             "objects_stable": True,
         },
     }
@@ -124,6 +127,14 @@ class ShelfE2EBuildV2Test(unittest.TestCase):
         errors = quality_errors(meta, result, 300)
         self.assertTrue(any("tracking_enforced" in error for error in errors))
         self.assertTrue(any("policy_episode_end.reason" in error for error in errors))
+
+    def test_terminal_hold_contact_or_tracking_failure_is_rejected(self):
+        meta, result = valid_quality_records()
+        result["safety_home"]["tracking_passed"] = False
+        result["safety_home"]["strip_contact_force_peak_n"] = 0.201
+        errors = quality_errors(meta, result, 300)
+        self.assertIn("safety_home.tracking_passed is not true", errors)
+        self.assertIn("safety_home.strip_contact_force_peak_n exceeds 0.2 N", errors)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "specimen_id": "synthetic_rubber_strip_simulation_v1",
+  "measurement_units": "field_suffixes_v1",
+  "provenance": {
+    "kind": "synthetic_engineering_baseline",
+    "measured": false,
+    "formal_collection_allowed": false,
+    "basis": "Current RubberStrip.obj geometry and internally consistent assumed elastic response.",
+    "replacement_required": "Replace assumed response and friction values with measurements from the physical strip before formal data collection."
+  },
+  "safety_note": "Synthetic values only. Do not use these loads as a physical test instruction or claim that a specimen was measured.",
+  "geometry": {
+    "mass_kg": [0.4004, 0.4006],
+    "length_m": [1.59896, 1.59908],
+    "width_m": [0.03, 0.03005],
+    "thickness_m": [0.008, 0.00805],
+    "natural_arch_height_m": [0.06, 0.0604],
+    "balance_offset_m": [0.0, 0.0003]
+  },
+  "axial_tension": {
+    "gauge_length_m": 1.2,
+    "trials": [
+      {
+        "points": [
+          {"load_n": 0.0, "extension_m": 0.0, "hold_s": 5.0},
+          {"load_n": 10.0, "extension_m": 0.00088, "hold_s": 5.0},
+          {"load_n": 20.0, "extension_m": 0.00176, "hold_s": 5.0},
+          {"load_n": 30.0, "extension_m": 0.00265, "hold_s": 5.0}
+        ],
+        "residual_extension_m": 0.0001
+      },
+      {
+        "points": [
+          {"load_n": 0.0, "extension_m": 0.0, "hold_s": 5.0},
+          {"load_n": 10.0, "extension_m": 0.0009, "hold_s": 5.0},
+          {"load_n": 20.0, "extension_m": 0.0018, "hold_s": 5.0},
+          {"load_n": 30.0, "extension_m": 0.00272, "hold_s": 5.0}
+        ],
+        "residual_extension_m": 0.00012
+      }
+    ]
+  },
+  "three_point_bending": {
+    "support_span_m": 0.6,
+    "trials": [
+      {
+        "points": [
+          {"load_n": 0.0, "center_deflection_m": 0.0},
+          {"load_n": 0.5, "center_deflection_m": 0.0305},
+          {"load_n": 1.0, "center_deflection_m": 0.061},
+          {"load_n": 1.5, "center_deflection_m": 0.0915}
+        ],
+        "residual_deflection_m": 0.0015
+      },
+      {
+        "points": [
+          {"load_n": 0.0, "center_deflection_m": 0.0},
+          {"load_n": 0.5, "center_deflection_m": 0.0312},
+          {"load_n": 1.0, "center_deflection_m": 0.0623},
+          {"load_n": 1.5, "center_deflection_m": 0.0934}
+        ],
+        "residual_deflection_m": 0.0018
+      }
+    ]
+  },
+  "torsion": {
+    "gauge_length_m": 0.6,
+    "trials": [
+      {
+        "points": [
+          {"torque_nm": 0.0, "angle_rad": 0.0},
+          {"torque_nm": 0.03, "angle_rad": 0.21},
+          {"torque_nm": 0.06, "angle_rad": 0.42}
+        ],
+        "residual_angle_rad": 0.006
+      },
+      {
+        "points": [
+          {"torque_nm": 0.0, "angle_rad": 0.0},
+          {"torque_nm": 0.03, "angle_rad": 0.215},
+          {"torque_nm": 0.06, "angle_rad": 0.43}
+        ],
+        "residual_angle_rad": 0.007
+      }
+    ]
+  },
+  "free_decay": {
+    "sample_rate_hz": 120.0,
+    "trials": [
+      {
+        "initial_displacement_m": 0.1,
+        "peak_time_s": [0.3, 0.9, 1.5, 2.1],
+        "peak_displacement_m": [0.08, 0.052, 0.034, 0.022],
+        "stable_time_s": 3.0
+      },
+      {
+        "initial_displacement_m": 0.1,
+        "peak_time_s": [0.31, 0.92, 1.53, 2.14],
+        "peak_displacement_m": [0.081, 0.054, 0.036, 0.024],
+        "stable_time_s": 3.1
+      }
+    ]
+  },
+  "friction": {
+    "shelf_critical_angle_deg": [29.0, 30.0, 31.0],
+    "gripper_pad_critical_angle_deg": [39.0, 40.0, 41.0]
+  }
+}

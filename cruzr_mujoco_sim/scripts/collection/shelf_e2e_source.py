@@ -4,6 +4,7 @@
 import glob
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -23,7 +24,11 @@ from cruzr_s2_sdk_contract import (
     load_sdk_timestamp_sidecar,
 )
 from shelf_e2e_contract import CHUNK_SIZE, FPS, IMAGE_SHAPE
-from shelf_e2e_flex_state import internal_state_errors
+from shelf_e2e_flex_state import (
+    FLEX_TASK_VERSION,
+    RIGID_TASK_VERSION,
+    internal_state_errors,
+)
 from shelf_e2e_profiles import (
     STRICT_COLLECTION_PROFILE,
     collection_cameras,
@@ -60,6 +65,40 @@ def source_split(seed):
     if bucket == 0:
         return "test"
     return "train"
+
+
+def object_model_errors(episode_meta):
+    """Reject non-measured flexible models before dataset ingestion."""
+    task_version = episode_meta.get("task_version")
+    model = episode_meta.get("object_model")
+    if task_version == RIGID_TASK_VERSION:
+        if model is None:  # Backward-compatible rigid sources.
+            return []
+        if not isinstance(model, dict):
+            return ["episode_metadata.object_model must be an object"]
+        errors = []
+        if model.get("task_version") != RIGID_TASK_VERSION:
+            errors.append("rigid object_model task_version mismatch")
+        if model.get("formal_collection_allowed") is not True:
+            errors.append("rigid object_model is not approved for collection")
+        return errors
+    if task_version != FLEX_TASK_VERSION:
+        return []
+    if not isinstance(model, dict):
+        return ["flex episode requires episode_metadata.object_model provenance"]
+    errors = []
+    if model.get("task_version") != FLEX_TASK_VERSION:
+        errors.append("flex object_model task_version mismatch")
+    if model.get("formal_collection_allowed") is not True:
+        errors.append("flex object_model is synthetic or not approved for formal collection")
+    provenance = model.get("source_measurement_provenance")
+    if not isinstance(provenance, dict) or provenance.get("measured") is not True:
+        errors.append("flex object_model requires measured physical provenance")
+    for field in ("source_parameter_sha256", "template_sha256"):
+        value = model.get(field)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            errors.append(f"flex object_model.{field} must be a SHA-256")
+    return errors
 
 
 def quality_errors(meta, result, num_frames):
@@ -103,6 +142,13 @@ def quality_errors(meta, result, num_frames):
     safety_home = result.get("safety_home") or {}
     if safety_home.get("recorded_in_policy_episode") is not False:
         errors.append("safety_home was not explicitly kept outside the policy episode")
+    if safety_home.get("tracking_passed") is not True:
+        errors.append("safety_home.tracking_passed is not true")
+    if safety_home.get("release_passed") is not True:
+        errors.append("safety_home.release_passed is not true")
+    contact_peak = safety_home.get("strip_contact_force_peak_n")
+    if not isinstance(contact_peak, (int, float)) or contact_peak > 0.2:
+        errors.append("safety_home.strip_contact_force_peak_n exceeds 0.2 N")
     if safety_home.get("objects_stable") is not True:
         errors.append("objects were not stable after safety_home")
     return errors
@@ -273,6 +319,7 @@ def validate_source_dir(path):
         if diversity is None
         else (diversity.get("scene_randomization") or {}).get("layout_mode")
     )
+    errors.extend(object_model_errors(episode_meta))
     errors.extend(internal_state_errors(path, episode_meta, num_frames))
 
     if meta.get("fps") != FPS:

@@ -50,4 +50,5 @@ __pycache__/
 # ===== 日志 =====
 *.log
 logs/
+log/
 runs/

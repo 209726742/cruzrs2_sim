@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "specimen_id": "synthetic_reinforced_strip_simulation_v2",
+  "measurement_units": "field_suffixes_v1",
+  "provenance": {
+    "kind": "synthetic_engineering_baseline_v2_reinforced_strip",
+    "measured": false,
+    "formal_collection_allowed": false,
+    "basis": "Current RubberStrip.obj geometry, the existing 0.605 s decay curve, and the no-central-support requirement that the 60 mm natural arch retain pickup clearance under self-weight.",
+    "material_interpretation": "rubber-coated reinforced spring strip, not homogeneous soft rubber",
+    "replacement_required": "Replace every assumed response and friction value with physical measurements before formal data collection."
+  },
+  "safety_note": "Synthetic values only. Do not use these loads as a physical test instruction or claim that a specimen was measured.",
+  "geometry": {
+    "mass_kg": [0.4004, 0.4006],
+    "length_m": [1.59896, 1.59908],
+    "width_m": [0.03, 0.03005],
+    "thickness_m": [0.008, 0.00805],
+    "natural_arch_height_m": [0.06, 0.0604],
+    "balance_offset_m": [0.0, 0.0003]
+  },
+  "axial_tension": {
+    "gauge_length_m": 1.2,
+    "trials": [
+      {
+        "points": [
+          {"load_n": 0.0, "extension_m": 0.0, "hold_s": 5.0},
+          {"load_n": 10.0, "extension_m": 0.00000520, "hold_s": 5.0},
+          {"load_n": 20.0, "extension_m": 0.00001040, "hold_s": 5.0},
+          {"load_n": 30.0, "extension_m": 0.00001560, "hold_s": 5.0}
+        ],
+        "residual_extension_m": 0.0000010
+      },
+      {
+        "points": [
+          {"load_n": 0.0, "extension_m": 0.0, "hold_s": 5.0},
+          {"load_n": 10.0, "extension_m": 0.00000531, "hold_s": 5.0},
+          {"load_n": 20.0, "extension_m": 0.00001062, "hold_s": 5.0},
+          {"load_n": 30.0, "extension_m": 0.00001593, "hold_s": 5.0}
+        ],
+        "residual_extension_m": 0.0000012
+      }
+    ]
+  },
+  "three_point_bending": {
+    "support_span_m": 0.6,
+    "trials": [
+      {
+        "points": [
+          {"load_n": 0.0, "center_deflection_m": 0.0},
+          {"load_n": 0.5, "center_deflection_m": 0.000182},
+          {"load_n": 1.0, "center_deflection_m": 0.000364},
+          {"load_n": 1.5, "center_deflection_m": 0.000546}
+        ],
+        "residual_deflection_m": 0.00002
+      },
+      {
+        "points": [
+          {"load_n": 0.0, "center_deflection_m": 0.0},
+          {"load_n": 0.5, "center_deflection_m": 0.000185},
+          {"load_n": 1.0, "center_deflection_m": 0.000370},
+          {"load_n": 1.5, "center_deflection_m": 0.000555}
+        ],
+        "residual_deflection_m": 0.00002
+      }
+    ]
+  },
+  "torsion": {
+    "gauge_length_m": 0.6,
+    "trials": [
+      {
+        "points": [
+          {"torque_nm": 0.0, "angle_rad": 0.0},
+          {"torque_nm": 0.03, "angle_rad": 0.00125},
+          {"torque_nm": 0.06, "angle_rad": 0.00250}
+        ],
+        "residual_angle_rad": 0.00005
+      },
+      {
+        "points": [
+          {"torque_nm": 0.0, "angle_rad": 0.0},
+          {"torque_nm": 0.03, "angle_rad": 0.00128},
+          {"torque_nm": 0.06, "angle_rad": 0.00256}
+        ],
+        "residual_angle_rad": 0.00005
+      }
+    ]
+  },
+  "free_decay": {
+    "sample_rate_hz": 120.0,
+    "protocol": {
+      "boundary_condition": "full_length_fixed_first_segment",
+      "excitation": "analytic_first_cantilever_mode_curvature",
+      "bending_axis": "weak_axis_local_z_rotation",
+      "observed_body": "strip_B_last",
+      "gravity_m_s2": [0.0, 0.0, 0.0],
+      "contacts": false
+    },
+    "trials": [
+      {
+        "initial_displacement_m": 0.1,
+        "peak_time_s": [0.3, 0.9, 1.5, 2.1],
+        "peak_displacement_m": [0.08, 0.052, 0.034, 0.022],
+        "stable_time_s": 3.0
+      },
+      {
+        "initial_displacement_m": 0.1,
+        "peak_time_s": [0.31, 0.92, 1.53, 2.14],
+        "peak_displacement_m": [0.081, 0.054, 0.036, 0.024],
+        "stable_time_s": 3.1
+      }
+    ]
+  },
+  "friction": {
+    "shelf_critical_angle_deg": [29.0, 30.0, 31.0],
+    "gripper_pad_critical_angle_deg": [39.0, 40.0, 41.0]
+  }
+}

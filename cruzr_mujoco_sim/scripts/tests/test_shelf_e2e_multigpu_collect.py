@@ -95,6 +95,50 @@ class ShelfE2EMultiGPUCollectTest(unittest.TestCase):
         self.assertTrue(any("ready=False" in error for error in errors))
         self.assertTrue(any("blockers" in error for error in errors))
 
+    def test_candidate_mode_waives_only_readiness_rate(self):
+        args = parse_args([
+            "--gpu-count", "4",
+            "--target-success-total", "20",
+            "--campaign", "candidate_canary",
+            "--output-root", "/tmp/candidate_output",
+            "--log-root", "/tmp/candidate_logs",
+            "--candidate-accept-readiness-blocker",
+        ])
+        plan = build_plan(args)
+        report = {
+            "schema_version": 2,
+            "mode": "plan_only_no_launch",
+            "ready": False,
+            "launch_performed": False,
+            "collection_profile": plan["collection_profile"],
+            "gpu_count": plan["gpu_count"],
+            "target_success_total": plan["target_success_total"],
+            "campaign": plan["campaign"],
+            "output_root": plan["output_root"],
+            "log_root": plan["log_root"],
+            "settings": plan["settings"],
+            "blockers": [
+                "strict task readiness is 16/26; formal collection requires "
+                "at least 90% (24/26)"
+            ],
+            "checks": {
+                "representative_sweep": {
+                    "result_count": 26,
+                    "task_pass_count": 16,
+                    "sdk_pass_count": 26,
+                    "motion_pass_count": 26,
+                    "collection_ready_pass_count": 16,
+                }
+            },
+        }
+        self.assertEqual(
+            preflight_errors(report, plan, allow_candidate_readiness=True), []
+        )
+        report["blockers"].append("capture smoke did not pass")
+        errors = preflight_errors(report, plan, allow_candidate_readiness=True)
+        self.assertTrue(any("may waive only" in error for error in errors))
+
+
 
 if __name__ == "__main__":
     unittest.main()

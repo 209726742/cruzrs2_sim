@@ -16,7 +16,9 @@ from action_quality import analyze_motion
 
 
 class ActionQualityTest(unittest.TestCase):
-    def analyze(self, state, action, *, enforce_tracking=True):
+    def analyze(
+        self, state, action, *, enforce_tracking=True, action_delta_limit=0.15
+    ):
         return analyze_motion(
             state,
             action,
@@ -24,7 +26,7 @@ class ActionQualityTest(unittest.TestCase):
             fps=30,
             phases=np.full(len(action), "test_phase"),
             joint_names=[f"joint_{index}" for index in range(16)],
-            action_delta_limit=0.15,
+            action_delta_limit=action_delta_limit,
             tracking_p95_limit=0.03,
             tracking_max_limit=0.15,
             terminal_tracking_limit=0.05,
@@ -56,6 +58,22 @@ class ActionQualityTest(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertFalse(result["tracking_passed"])
         self.assertTrue(result["warnings"])
+
+    def test_rate_limited_unload_avoids_one_step_command_failure(self):
+        direct = np.zeros((4, 16), dtype=np.float32)
+        direct[2:, 0] = 0.137
+        direct_result = self.analyze(
+            direct.copy(), direct, action_delta_limit=0.06981317007977318
+        )
+        self.assertFalse(direct_result["passed"])
+        self.assertIn("action delta max", direct_result["failures"][0])
+
+        smooth = np.zeros((5, 16), dtype=np.float32)
+        smooth[:, 0] = np.linspace(0.0, 0.137, len(smooth))
+        smooth_result = self.analyze(
+            smooth.copy(), smooth, action_delta_limit=0.06981317007977318
+        )
+        self.assertTrue(smooth_result["passed"])
 
 
 if __name__ == "__main__":

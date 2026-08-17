@@ -92,6 +92,7 @@ def validate_measurements(document):
         return {
             "complete": False,
             "physical_parameters_generated": False,
+            "formal_collection_allowed": False,
             "model_decision": "undetermined",
             "errors": ["measurement document must be a JSON object"],
             "warnings": [],
@@ -102,6 +103,21 @@ def validate_measurements(document):
         errors.append("specimen_id must be a non-empty string")
     if document.get("measurement_units") != "field_suffixes_v1":
         errors.append("measurement_units must be field_suffixes_v1; use the unit named in each field")
+
+    provenance = document.get("provenance")
+    measured = None
+    provenance_kind = "unspecified"
+    formal_collection_allowed = True
+    if isinstance(provenance, dict):
+        measured = provenance.get("measured")
+        provenance_kind = str(provenance.get("kind", "unspecified"))
+        formal_collection_allowed = provenance.get("formal_collection_allowed") is not False
+        if measured is False:
+            formal_collection_allowed = False
+            warnings.append(
+                "synthetic engineering assumptions are valid for model development only; "
+                "formal collection requires physical measurements"
+            )
 
     geometry = _section(errors, document, "geometry")
     geometry_values = {}
@@ -212,6 +228,11 @@ def validate_measurements(document):
     return {
         "complete": not errors,
         "physical_parameters_generated": False,
+        "formal_collection_allowed": formal_collection_allowed,
+        "measurement_provenance": {
+            "kind": provenance_kind,
+            "measured": measured,
+        },
         "model_decision": decision,
         "cable_gate": cable_gate,
         "friction_summary": friction_mu,
@@ -232,6 +253,7 @@ def main(argv=None):
         report = {
             "complete": False,
             "physical_parameters_generated": False,
+            "formal_collection_allowed": False,
             "model_decision": "undetermined",
             "errors": [f"cannot read measurement JSON: {exc}"],
             "warnings": [],

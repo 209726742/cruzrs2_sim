@@ -93,6 +93,20 @@ class StripMeasurementCheckTest(unittest.TestCase):
         self.assertEqual(report["model_decision"], "requires_extensible_model")
         self.assertFalse(report["cable_gate"]["passed"])
 
+    def test_synthetic_assumptions_are_never_formal_collection_evidence(self):
+        document = synthetic_complete_document()
+        document["provenance"] = {
+            "kind": "synthetic_engineering_baseline",
+            "measured": False,
+            "formal_collection_allowed": False,
+        }
+        report = validate_measurements(document)
+        self.assertTrue(report["complete"], report["errors"])
+        self.assertEqual(report["model_decision"], "cable_candidate")
+        self.assertFalse(report["formal_collection_allowed"])
+        self.assertFalse(report["measurement_provenance"]["measured"])
+        self.assertTrue(any("model development only" in item for item in report["warnings"]))
+
     def test_bad_units_order_and_missing_repeat_are_rejected(self):
         document = synthetic_complete_document()
         document["measurement_units"] = "mixed"

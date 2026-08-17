@@ -20,6 +20,7 @@ an internal cut.
 
 Env: EPISODES glob, OUT root. CUT_MIN=40 KEEP=10 NAV_PAD=15 NAV_GAP=30.
 """
+from concurrent.futures import ThreadPoolExecutor
 import glob
 import json
 import os
@@ -60,6 +61,9 @@ CUT_MIN = int(os.environ.get("CUT_MIN", "40"))
 KEEP = int(os.environ.get("KEEP", "10"))
 NAV_PAD = int(os.environ.get("NAV_PAD", "15"))
 NAV_GAP = int(os.environ.get("NAV_GAP", "30"))
+ENCODE_WORKERS = int(os.environ.get("ENCODE_WORKERS", "1"))
+if ENCODE_WORKERS <= 0:
+    raise ValueError("ENCODE_WORKERS must be positive")
 PROMPT = "move the steel pillar to the middle shelf of the cart, then move the rubber strip to the top shelf"
 MIN_SPAN_FRAMES = max(60, CHUNK_SIZE + 1)
 
@@ -148,8 +152,7 @@ def episode_specs(z):
 
 def encode_spans(src_dir, spans, out_path, tmpdir):
     """Encode one continuous source span with a perfectly uniform 30 FPS timeline."""
-    seq = os.path.join(tmpdir, "seq")
-    os.makedirs(seq, exist_ok=True)
+    seq = tempfile.mkdtemp(prefix="seq_", dir=tmpdir)
     k = 0
     for a, b in spans:
         for f in range(a, b):
@@ -194,6 +197,31 @@ def validate_encoded_video(path, expected_frames):
     expected_pts = np.arange(expected_frames) / FPS
     if pts.shape != expected_pts.shape or not np.allclose(pts, expected_pts, atol=1e-5, rtol=0):
         raise ValueError(f"{path}: video PTS is not a uniform {FPS} FPS grid")
+
+def encode_episode_videos(ds, cameras, start, stop, ep_idx, out, tmpdir):
+    """Encode independent camera streams concurrently when explicitly requested."""
+    jobs = []
+    for camera in cameras:
+        video_dir = f"{out}/videos/chunk-000/observation.images.{camera}"
+        os.makedirs(video_dir, exist_ok=True)
+        jobs.append((
+            os.path.join(ds, "frames", camera),
+            f"{video_dir}/episode_{ep_idx:06d}.mp4",
+        ))
+
+    def encode_and_validate(job):
+        src_dir, video_path = job
+        encode_spans(src_dir, [(start, stop)], video_path, tmpdir)
+        validate_encoded_video(video_path, stop - start)
+
+    workers = min(ENCODE_WORKERS, len(jobs))
+    if workers == 1:
+        for job in jobs:
+            encode_and_validate(job)
+        return
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        list(executor.map(encode_and_validate, jobs))
+
 
 
 def main():
@@ -284,13 +312,9 @@ def main():
                 "task_index": pa.array(np.zeros(n, dtype=np.int64)),
             })
             pq.write_table(table, f"{out}/data/chunk-000/episode_{ep_idx:06d}.parquet")
-            for c in cameras:
-                vd = f"{out}/videos/chunk-000/observation.images.{c}"
-                os.makedirs(vd, exist_ok=True)
-                video_path = f"{vd}/episode_{ep_idx:06d}.mp4"
-                encode_spans(os.path.join(ds, "frames", c), [(start, stop)],
-                             video_path, tmpd)
-                validate_encoded_video(video_path, n)
+            encode_episode_videos(
+                ds, cameras, start, stop, ep_idx, out, tmpd
+            )
             ep_lines.append(json.dumps({
                 "episode_index": ep_idx,
                 "tasks": [PROMPT],

@@ -7,7 +7,9 @@ its data are intentionally left untouched.
 
 Env: SEED (required), EXPERT_OUT, E2E_DIVERSITY_MODE=clean|recovery,
 E2E_KICKS=0 (clean default; recovery requires 1), E2E_NOREC=1,
-E2E_LAYOUT_MODE=random|boundary, E2E_TOUCHDOWN=1.
+E2E_LAYOUT_MODE=random|boundary, E2E_TOUCHDOWN=1,
+E2E_STRIP_MODEL=rigid_segmented_v1|strip_cable_synthetic_v1|
+strip_cable_synthetic_v2_reinforced.
 """
 import importlib.util
 import json
@@ -42,11 +44,15 @@ from shelf_e2e_flex_state import (  # noqa: E402
     object_state_contract,
     save_internal_state,
 )
-from shelf_e2e_objects import object_info, root_pose  # noqa: E402
+from shelf_e2e_objects import object_info, root_pose, subtree_com  # noqa: E402
 from shelf_e2e_profiles import (  # noqa: E402
     STRICT_COLLECTION_PROFILE,
     collection_cameras,
     normalize_collection_profile,
+)
+from strip_cable_scene import (  # noqa: E402
+    RIGID_MODEL_ID,
+    select_scene_template,
 )
 
 SEED = int(os.environ["SEED"])
@@ -114,7 +120,12 @@ if SCENE_RUN_ID and not re.fullmatch(r"[A-Za-z0-9._-]+", SCENE_RUN_ID):
     raise ValueError(f"unsupported E2E_RUN_ID: {SCENE_RUN_ID!r}")
 scene_token = f"{SCENE_RUN_ID}_{SEED}" if SCENE_RUN_ID else str(SEED)
 os.makedirs(SCENE_DIR, exist_ok=True)
-with open(os.path.join(ROOT, "assets", "e2e", "template_pillar_v1.xml")) as f:
+STRIP_MODEL_ID = os.environ.get("E2E_STRIP_MODEL", RIGID_MODEL_ID).strip()
+SCENE_TEMPLATE, STRIP_MODEL_MANIFEST = select_scene_template(
+    STRIP_MODEL_ID,
+    norec=os.environ.get("E2E_NOREC") == "1",
+)
+with open(SCENE_TEMPLATE) as f:
     scene_text = f.read()
 scene_text = re.sub(
     r'(<body name="shelf_cart" pos=")[^"]*(")',
@@ -341,6 +352,8 @@ def frames(n):
 
 
 def obj_pos(name):
+    if OBJECTS[name]["ball_qpos_adrs"]:
+        return subtree_com(m, d, OBJECTS[name])
     return d.xpos[OBJECTS[name]["body"]].copy()
 
 
@@ -495,6 +508,18 @@ def gname(g):
     return mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or f"geom{g}"
 
 
+def pad_object_nearest(pad, name):
+    nearest = None
+    for object_geom in OBJECTS[name]["geoms"]:
+        fromto = np.zeros(6, dtype=np.float64)
+        distance = float(mujoco.mj_geomDistance(
+            m, d, pad, object_geom, 1.0, fromto
+        ))
+        if nearest is None or distance < nearest[0]:
+            nearest = (distance, object_geom, fromto.copy())
+    return nearest
+
+
 def grasp_dump(name):
     """Everything about the grasp pose, to find why one pad misses the part.
 
@@ -514,6 +539,13 @@ def grasp_dump(name):
                           for k in range(3)]
             print(f"[dump:{name}] pad {gname(g):<8} pos={np.round(p, 4).tolist()} "
                   f"inside_xyz={inside} outside_mm={outside_mm}", flush=True)
+            distance, object_geom, fromto = pad_object_nearest(g, name)
+            print(
+                f"[dump:{name}] pad {gname(g):<8} nearest={gname(object_geom)} "
+                f"distance_mm={1000*distance:+.2f} "
+                f"toward_part_mm={np.round(1000*(fromto[3:]-fromto[:3]), 2).tolist()}",
+                flush=True,
+            )
         touching = {}
         for i in range(d.ncon):
             gs = {d.contact[i].geom1, d.contact[i].geom2}
@@ -532,6 +564,16 @@ def grasp_dump(name):
             if slack < 0.05:
                 near.append(f"j{j}={q:+.3f}(lo={arm.lo[j]:+.2f},hi={arm.hi[j]:+.2f})")
         print(f"[dump:{name}] {hand} joints at limit: {near or 'none'}", flush=True)
+    np.savez_compressed(
+        os.path.join(OUT, f"grasp_debug_{name}.npz"),
+        qpos=d.qpos.copy(),
+        qvel=d.qvel.copy(),
+        ctrl=d.ctrl.copy(),
+        qtgt_l=ct.qtgt["l"].copy(),
+        qtgt_r=ct.qtgt["r"].copy(),
+        grip_l=np.asarray([ct.grip_cmd["l"]]),
+        grip_r=np.asarray([ct.grip_cmd["r"]]),
+    )
 
 
 def final_contacts(name):
@@ -728,6 +770,7 @@ ct.REC["phase"] = "setup"
 ct.REC["metadata"] = {
     "e2e": True,
     "task_version": TASK_VERSION,
+    "object_model": dict(STRIP_MODEL_MANIFEST),
     "seed": SEED,
     "demo_variants": {"pillar": pillar_variant, "strip": 3},
     "pillar_xy": pillar_xy.tolist(),
@@ -896,6 +939,8 @@ def finish(ok):
     print(f"[duration] ticks={TICKS} sim={sim_s:.1f}s", flush=True)
     result = {
         "seed": SEED,
+        "task_version": TASK_VERSION,
+        "object_model": dict(STRIP_MODEL_MANIFEST),
         "passed": bool(ok),
         "first_failed_gate": FAIL[0].split(":")[0] if FAIL else None,
         "failed_gates": list(FAIL),
@@ -1466,17 +1511,17 @@ def wait_for_arm_tracking(label, hands=("l", "r"), tol=None):
     return False
 
 
-def sync_command_to_state(label):
+def sync_command_to_state(label, hands=("l", "r")):
     """Unload position-servo error after release without stepping the command."""
     measured_l, measured_r = measured_arm_targets()
     servo_to(
-        measured_l,
-        measured_r,
+        measured_l if "l" in hands else ct.qtgt["l"].copy(),
+        measured_r if "r" in hands else ct.qtgt["r"].copy(),
         grip_l=ct.GRIP_OPEN,
         grip_r=ct.GRIP_OPEN,
         label=f"{label}/sync",
     )
-    return wait_for_arm_tracking(f"{label}/sync")
+    return wait_for_arm_tracking(f"{label}/sync", hands=hands)
 
 
 def move_hands(delta, allow_reorient=True, hands=("l", "r")):
@@ -1695,9 +1740,8 @@ def seat_down(name, step=0.004, budget=0.090):
     The bar is a single rigid body with 53 mm of arch, so it cannot be pressed flat, and with
     the jaws shut it cannot rotate either; pressing harder only drives the touching end in.
     Opening the jaws first lets it pivot, and the lower pads then lower it the rest of the way
-    onto both ends. Full weight on the shelf is the signal that the pads carry nothing, and it
-    needs no tuning: the bar weighs 3.93 N and every seed that passes today reads 3.9 N, while
-    every seed that fails reads 2.0-2.6 N with a cart post taking the rest.
+    onto both ends. Full weight on the shelf is the signal to stop pressing down. The release
+    stage then clears both pads and verifies that support remains without gripper contact.
     """
     want = 0.9 * OBJECTS[name]["weight_n"]
     if name == "strip":
@@ -1720,9 +1764,25 @@ def seat_down(name, step=0.004, budget=0.090):
             while (grip_force("l", name) > 0.2
                    or (left_cleared < 0.015 and support < want)):
                 clear_step = 0.005
+                current_shift = float(
+                    np.linalg.norm(obj_pos(name)[:2] - seat_anchor_xy)
+                )
+                # Do not let the final 5 mm command knowingly consume more than the
+                # remaining strict object-shift budget.  The post-step check below still
+                # rejects any nonlinear overshoot.
+                if left_cleared >= 0.025 - 1e-9:
+                    clear_step = min(clear_step, 0.015 - current_shift)
+                if clear_step < 0.0005:
+                    print(f"[seat:{name}] left preclear object shift budget exhausted",
+                          flush=True)
+                    if GRASP_DUMP:
+                        grasp_dump(name)
+                    return False
                 if left_cleared + clear_step > 0.030 + 1e-9:
                     print(f"[seat:{name}] left preclear exhausted "
                           f"force={grip_force('l', name):.2f}N", flush=True)
+                    if GRASP_DUMP:
+                        grasp_dump(name)
                     return False
                 weighted = np.zeros(3)
                 total_weight = 0.0
@@ -1758,9 +1818,9 @@ def seat_down(name, step=0.004, budget=0.090):
                         return False
                     left_preclear_direction = horizontal / horizontal_norm
                 elif left_preclear_direction is None:
-                    print(f"[seat:{name}] left preclear has no measured direction",
+                    print(f"[seat:{name}] left preclear contact-free; continuing seat",
                           flush=True)
-                    return False
+                    break
                 direction = left_preclear_direction
                 if not move_hands(clear_step * direction, hands=("l",)):
                     print(f"[seat:{name}] left preclear IK rejected", flush=True)
@@ -1775,7 +1835,17 @@ def seat_down(name, step=0.004, budget=0.090):
                       f"object_xy_shift={1000*shift:.1f}mm", flush=True)
                 if shift > 0.015:
                     print(f"[seat:{name}] left preclear object shift exceeded", flush=True)
+                    if GRASP_DUMP:
+                        grasp_dump(name)
                     return False
+                # Stop pressing as soon as the shelf carries the part.  release_hands clears
+                # any remaining pad contact, then the unchanged placement gate verifies
+                # unloaded support.
+                if support >= want:
+                    print(f"[seat:{name}] supported during preclear after "
+                          f"{1000*left_cleared:.0f}mm support={support:.2f}N of "
+                          f"{OBJECTS[name]['weight_n']:.2f}N", flush=True)
+                    return True
         support = pair_force(OBJECTS[name]["geoms"], {SHELF[name]})
         if support >= want:
             print(f"[seat:{name}] seated after {1000*lowered:.0f}mm "
@@ -1809,6 +1879,7 @@ def touch_down(name, step=0.004, max_steps=None, contact_gap=0.004, seat=False):
     """
     _, shi = ct.geom_aabb(SHELF[name])
     max_center_z = shi[2] + 0.070
+    geometry_contact_gap = min(contact_gap, 0.003) if name == "strip" else contact_gap
     if max_steps is None:
         lo, _ = obj_extent(name)
         max_steps = int(np.ceil((max(0.0, float(lo[2] - shi[2])) + 0.040) / step))
@@ -1820,15 +1891,30 @@ def touch_down(name, step=0.004, max_steps=None, contact_gap=0.004, seat=False):
         # Using a median section instead never registers contact and fails all 13 seeds.
         lo, _ = obj_extent(name)
         gap = float(lo[2] - shi[2])
-        if (support >= 1.0 and centre_z <= max_center_z) or gap <= contact_gap:
+        if (support >= 1.0 and centre_z <= max_center_z) or gap <= geometry_contact_gap:
             print(
                 f"[touchdown:{name}] contact after {i} steps ({1000*i*step:.0f}mm) "
                 f"support={support:.1f}N centre_z={centre_z:.3f} gap={1000*gap:+.0f}mm",
                 flush=True,
             )
-            for hand, arm in (("l", ct.L), ("r", ct.R)):
-                ct.qtgt[hand][:] = np.array([d.qpos[adr] for adr in arm.qadr])
-                ct.grip_cmd[hand] = ct.GRIP_CLOSE
+            measured_l, measured_r = measured_arm_targets()
+            unload_error = max(
+                float(np.abs(measured_l - ct.qtgt["l"]).max()),
+                float(np.abs(measured_r - ct.qtgt["r"]).max()),
+            )
+            if unload_error > ACTION_DELTA_MAX:
+                servo_to(
+                    measured_l,
+                    measured_r,
+                    grip_l=ct.GRIP_CLOSE,
+                    grip_r=ct.GRIP_CLOSE,
+                    label=f"{name}/touchdown_unload",
+                )
+            else:
+                ct.qtgt["l"][:] = measured_l
+                ct.qtgt["r"][:] = measured_r
+                ct.grip_cmd["l"] = ct.GRIP_CLOSE
+                ct.grip_cmd["r"] = ct.GRIP_CLOSE
             frames(20)
             support = pair_force(OBJECTS[name]["geoms"], {SHELF[name]})
             print(
@@ -1881,7 +1967,7 @@ def escape_dir(name, hand):
     return away / norm
 
 
-def move_home(steps=55, order="both", wait=True, stop_when=None):
+def move_home(steps=55, order="both", wait=True):
     """Return the arms home together or one arm at a time."""
     homes = {"l": HOME_L, "r": HOME_R}
 
@@ -1916,10 +2002,6 @@ def move_home(steps=55, order="both", wait=True, stop_when=None):
             ct.grip_cmd["r"] = ct.GRIP_OPEN
             stable = stable + 1 if remaining <= TRACK_SETTLE_TOL else 0
             frames(1)
-            if stop_when is not None and stop_when(label):
-                print(f"[move_home:{label}] clearance goal reached ticks={tick + 1}",
-                      flush=True)
-                return True
             if stable >= DECIM:
                 print(f"[move_home:{label}] reached home ticks={tick + 1}", flush=True)
                 return True
@@ -1962,6 +2044,8 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
     quiet_streak = 0
 
     last_directions = {"l": None, "r": None}
+    left_cartesian_travel = 0.0
+
     while True:
         active = {hand for hand in ("l", "r") if grip_force(hand, name) > quiet}
         object_shift = float(np.linalg.norm(obj_pos(name)[:2] - anchor_xy))
@@ -1970,21 +2054,18 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                   f"limit={1000*max_object_shift:.0f}mm",
                   flush=True)
             return False
-        left_escape_exhausted = (
-            name == "strip" and active == {"l"}
-            and distances["l"] + step > max_escape + 1e-9
-        )
-        if active and (quiet_streak or left_escape_exhausted):
+        left_cartesian_required = name == "strip" and active == {"l"}
+        if active and (quiet_streak or left_cartesian_required):
             if quiet_streak:
                 print(f"[release:{name}] recontact after "
                       f"{quiet_streak * CONTROL_DT:.2f}s", flush=True)
             else:
-                print(f"[release:{name}] left normal escape exhausted at "
-                      f"{1000*distances['l']:.0f}mm; clearance=cartesian", flush=True)
+                print(f"[release:{name}] left pad requires cartesian clearance at "
+                      f"{1000*distances['l']:.0f}mm", flush=True)
             quiet_streak = 0
             if name == "strip" and active == {"l"}:
                 set_phase("strip_clearance_entry")
-                if not sync_command_to_state("strip/clearance_entry"):
+                if not sync_command_to_state("strip/clearance_entry", hands=("l",)):
                     print(f"[release:{name}] ABORT clearance entry tracking", flush=True)
                     return False
                 set_phase("strip_clearance_home")
@@ -1992,11 +2073,18 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                       f"clearance=cartesian_right_then_left",
                       flush=True)
 
+                measured_right = measured_arm_targets()[1]
+                right_command_error = measured_right - ct.qtgt["r"]
+                print(f"[release:{name}] right_sync_probe "
+                      f"track={float(np.abs(right_command_error).max()):.4f}rad "
+                      f"delta={np.round(right_command_error, 3).tolist()} "
+                      f"gap={1000*hand_section_clearance(name, 'r'):.1f}mm "
+                      f"force={grip_force('r', name):.2f}N "
+                      f"left_cartesian_total={1000*left_cartesian_travel:.0f}mm",
+                      flush=True)
                 right_direction = last_directions["r"]
-                right_requires_gap = right_direction is not None
-                if right_direction is None:
-                    print(f"[release:{name}] right clearance=contact_monitor_only",
-                          flush=True)
+                right_requires_gap = False
+                print(f"[release:{name}] right clearance=force_monitored", flush=True)
                 right_extra = 0.0
                 while (right_requires_gap
                        and hand_section_clearance(name, "r") < 0.020):
@@ -2038,24 +2126,36 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                               f"{1000*object_shift:.1f}mm", flush=True)
                         return False
                 set_phase("strip_clearance_right_sync")
-                if not sync_command_to_state("strip/right_clearance"):
+                sync_right = (
+                    left_cartesian_travel >= 0.030
+                    and grip_force("r", name) <= quiet
+                )
+                sync_hands = ("l", "r") if sync_right else ("l",)
+                print(f"[release:{name}] right sync "
+                      f"scope={''.join(sync_hands)} "
+                      f"left_cartesian_total={1000*left_cartesian_travel:.0f}mm",
+                      flush=True)
+                if not sync_command_to_state(
+                    "strip/right_clearance", hands=sync_hands
+                ):
                     print(f"[release:{name}] ABORT right clearance sync", flush=True)
                     return False
                 right_gap = hand_section_clearance(name, "r")
-                if (grip_force("r", name) > quiet
-                        or (right_requires_gap and right_gap < 0.020)):
-                    print(f"[release:{name}] ABORT right clearance lost after sync "
-                          f"gap={1000*right_gap:.1f}mm", flush=True)
-                    return False
+                if grip_force("r", name) > quiet:
+                    print(f"[release:{name}] right recontact after sync; "
+                          f"retrying measured normals", flush=True)
+                    continue
 
                 left_extra = 0.0
+                restart_outer = False
                 while True:
                     set_phase("strip_clearance_left")
                     while max(grip_force("l", name), grip_force("r", name)) > quiet:
                         if grip_force("r", name) > quiet:
-                            print(f"[release:{name}] ABORT right recontact during left clear",
-                                  flush=True)
-                            return False
+                            print(f"[release:{name}] right recontact during left clear; "
+                                  f"retrying measured normals", flush=True)
+                            restart_outer = True
+                            break
                         if left_extra + step > 0.080 + 1e-9:
                             print(f"[release:{name}] ABORT left normal clearance "
                                   f"gap={1000*hand_section_clearance(name, 'l'):.1f}mm",
@@ -2089,16 +2189,21 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                                   f"coherence={coherence:.3f}", flush=True)
                             return False
                         left_direction /= left_norm
+                        last_directions["l"] = left_direction.copy()
                         q0, v0 = d.qpos.copy(), d.qvel.copy()
                         seed = measured_arm_targets()[0]
                         for j, adr in enumerate(ct.L.qadr):
                             d.qpos[adr] = seed[j]
                         mujoco.mj_fwdPosition(m, d)
                         rotation = d.xmat[ct.L.mount].reshape(3, 3).copy()
-                        target_position = d.xpos[ct.L.mount].copy() + step * left_direction
+                        target_position = (
+                            d.xpos[ct.L.mount].copy() + step * left_direction
+                        )
                         ct.ik(ct.L, target_position, rotation, iters=45, w=0.0)
                         target = np.array([d.qpos[adr] for adr in ct.L.qadr])
-                        residual = float(np.linalg.norm(target_position - d.xpos[ct.L.mount]))
+                        residual = float(
+                            np.linalg.norm(target_position - d.xpos[ct.L.mount])
+                        )
                         d.qpos[:], d.qvel[:] = q0, v0
                         mujoco.mj_forward(m, d)
                         if residual > tol:
@@ -2108,6 +2213,7 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                         servo_to(target, ct.qtgt["r"].copy(),
                                  min_steps=max(DECIM, int(np.ceil(step / 0.002))))
                         left_extra += step
+                        left_cartesian_travel += step
                         object_shift = float(np.linalg.norm(obj_pos(name)[:2] - anchor_xy))
                         left_gap = hand_section_clearance(name, "l")
                         right_gap = hand_section_clearance(name, "r")
@@ -2124,8 +2230,10 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                                   f"object_xy_shift={1000*object_shift:.1f}mm "
                                   f"right_gap={1000*right_gap:.1f}mm", flush=True)
                             return False
+                    if restart_outer:
+                        break
                     set_phase("strip_clearance_exit")
-                    if not sync_command_to_state("strip/clearance_exit"):
+                    if not sync_command_to_state("strip/clearance_exit", hands=("l",)):
                         print(f"[release:{name}] ABORT clearance exit tracking", flush=True)
                         return False
                     final_gaps = [hand_section_clearance(name, hand)
@@ -2170,6 +2278,8 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                               f"force={force:.2f}N inside={evidence['fully_on_shelf']}",
                               flush=True)
                         return False
+                if restart_outer:
+                    continue
         if not active:
             quiet_streak += 1
             if quiet_streak >= quiet_required:
@@ -2179,10 +2289,18 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                 return True
             frames(1)
             continue
-        if any(distances[hand] + step > max_escape + 1e-9 for hand in active):
-            print(f"[release:{name}] ABORT max_escape_mm={1000*max_escape:.0f} "
+        escape_limits = {
+            "l": max_escape,
+            "r": 0.040 if name == "strip" else max_escape,
+        }
+        if any(distances[hand] + step > escape_limits[hand] + 1e-9
+               for hand in active):
+            print(f"[release:{name}] ABORT max_escape_mm="
+                  f"({1000*escape_limits['l']:.0f},{1000*escape_limits['r']:.0f}) "
                   f"force=({grip_force('l', name):.2f},{grip_force('r', name):.2f})N",
                   flush=True)
+            if GRASP_DUMP:
+                grasp_dump(name)
             return False
 
         directions = {}
@@ -2214,6 +2332,10 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
             directions[hand] = weighted / np.linalg.norm(weighted)
             last_directions[hand] = directions[hand].copy()
 
+        pad_before = {
+            hand: np.mean([d.geom_xpos[g] for g in PADG[hand]], axis=0)
+            for hand in active
+        }
         q0, v0 = d.qpos.copy(), d.qvel.copy()
         targets, errors = {}, {}
         for hand, arm in (("l", ct.L), ("r", ct.R)):
@@ -2227,7 +2349,8 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                 continue
             rotation = d.xmat[arm.mount].reshape(3, 3).copy()
             target_position = d.xpos[arm.mount].copy() + step * directions[hand]
-            ct.ik(arm, target_position, rotation, iters=45, w=0.35)
+            ct.ik(arm, target_position, rotation, iters=45,
+                  w=0.0 if name == "strip" else 0.35)
             targets[hand] = np.array([d.qpos[adr] for adr in arm.qadr])
             errors[hand] = float(np.linalg.norm(target_position - d.xpos[arm.mount]))
         d.qpos[:], d.qvel[:] = q0, v0
@@ -2240,8 +2363,11 @@ def release_hands(name, quiet=0.2, step=0.005, max_escape=0.030,
                  min_steps=max(DECIM, int(np.ceil(step / 0.002))))
         for hand in active:
             distances[hand] += step
+            pad_after = np.mean([d.geom_xpos[g] for g in PADG[hand]], axis=0)
             print(f"[release:{name}:{hand}] out={1000*distances[hand]:.0f}mm "
                   f"axis={np.round(directions[hand], 2).tolist()} "
+                  f"pad_delta_mm={np.round(1000*(pad_after-pad_before[hand]), 1).tolist()} "
+                  f"gap={1000*hand_section_clearance(name, hand):.1f}mm "
                   f"force={grip_force(hand, name):.2f}N", flush=True)
 
 
@@ -2379,7 +2505,11 @@ def retreat_home(name, mode="lift", lift=0.04, home_steps=55):
     if mode == "release":
         if name == "strip":
             set_phase("strip_release_withdraw")
-            released = release_hands(name)
+            # The downstream tracking settle, two placement checks and terminal hold
+            # span about 2.0 s. Require a longer uninterrupted quiet state here so a
+            # delayed recontact is handled while this call still owns the original
+            # object-shift anchor and cumulative escape budgets.
+            released = release_hands(name, quiet_s=2.5)
             stage("released")
             if not released:
                 gate("strip_policy_release", False, "pad force remained above 0.2 N")
@@ -2392,6 +2522,8 @@ def retreat_home(name, mode="lift", lift=0.04, home_steps=55):
                 gate("strip_policy_terminal_release", False, "pad recontact after tracking settle")
                 finish(False)
             stage("policy_release")
+            if GRASP_DUMP:
+                grasp_dump(name)
             return
         # Joint-space home from inside the shelf is collision-prone: the old path
         # often changed the command by 2.2 rad while the measured joints did not
@@ -2675,8 +2807,21 @@ def run_trip(name):
             finish(False)
         print(f"[top_handoff] keep={'+'.join(carry_hands)} fR={force_r:.1f}N fL={force_l:.1f}N", flush=True)
         if released_hand is not None:
-            ct.grip_cmd[released_hand] = ct.GRIP_OPEN
-        frames(20)
+            # A hand can read zero at the last lift tick and regain contact as the long
+            # strip settles.  Confirm the loss before opening it; otherwise a transient
+            # unload turns the remaining approach into an avoidable one-hand carry.
+            frames(20)
+            settled_r, settled_l = grip_force("r", name), grip_force("l", name)
+            if settled_r >= 0.5 and settled_l >= 0.5:
+                carry_hands[:] = ["r", "l"]
+                released_hand = None
+                print(f"[top_handoff] reacquired both hands "
+                      f"fR={settled_r:.1f}N fL={settled_l:.1f}N", flush=True)
+            else:
+                ct.grip_cmd[released_hand] = ct.GRIP_OPEN
+                frames(20)
+        else:
+            frames(20)
         require_held("raised_for_top")
         actual_z = float(obj_pos(name)[2])
         if not gate(
@@ -2799,17 +2944,38 @@ def run_trip(name):
             finish(False)
 
         close_policy_episode("both_objects_released_and_stable")
-        set_phase("safety_home")
-        move_home(steps=release_home_steps, order=HOME_ORDER, wait=False)
+        set_phase("safety_terminal_hold")
+        ct.base_vel[:] = 0.0
+        ct.grip_cmd["l"] = ct.GRIP_OPEN
+        ct.grip_cmd["r"] = ct.GRIP_OPEN
+        hold_force_peak = 0.0
+        for _ in range(max(1, int(np.ceil(0.5 / CONTROL_DT)))):
+            frames(1)
+            hold_force_peak = max(
+                hold_force_peak,
+                grip_force("r", "strip"),
+                grip_force("l", "strip"),
+            )
         home_error = arm_tracking_error()
+        hold_force = max(grip_force("r", "strip"), grip_force("l", "strip"))
+        hold_tracking = home_error <= TRACK_SETTLE_TOL
+        hold_released = hold_force_peak <= 0.2
         VALIDATION["safety_home"] = {
+            "mode": "terminal_hold",
+            "home_attempted": False,
             "tracking_error_rad": round(float(home_error), 6),
-            "tracking_passed": bool(home_error <= TRACK_SETTLE_TOL),
+            "tracking_passed": bool(hold_tracking),
             "recorded_in_policy_episode": False,
+            "release_recoveries": [],
+            "strip_contact_force_n": round(float(hold_force), 3),
+            "strip_contact_force_peak_n": round(float(hold_force_peak), 3),
+            "release_passed": bool(hold_released),
         }
         print(
-            f"[safety_home] tracking_error={home_error:.4f}rad "
-            f"tracked={home_error <= TRACK_SETTLE_TOL}",
+            f"[safety_home] mode=terminal_hold home_attempted=false "
+            f"tracking_error={home_error:.4f}rad tracked={hold_tracking} "
+            f"strip_force={hold_force:.2f}N peak={hold_force_peak:.2f}N "
+            f"released={hold_released}",
             flush=True,
         )
 
@@ -2829,10 +2995,24 @@ placement_audit("strip")
 both = pillar_final["stable"] and strip_final["stable"]
 if "safety_home" in VALIDATION:
     VALIDATION["safety_home"]["objects_stable"] = bool(both)
+safety_home = VALIDATION.get("safety_home") or {}
+terminal_hold_ok = bool(
+    safety_home.get("tracking_passed")
+    and safety_home.get("release_passed")
+    and safety_home.get("objects_stable")
+)
 gate(
     "placed_both",
     both,
     f"pillar={pillar_final['stable']}({pillar_final['cart_support_force_n']:.1f}N) "
     f"strip={strip_final['stable']}({strip_final['cart_support_force_n']:.1f}N)",
 )
-finish(both)
+gate(
+    "safety_terminal_hold",
+    terminal_hold_ok,
+    f"tracking={safety_home.get('tracking_passed')} "
+    f"released={safety_home.get('release_passed')} "
+    f"peak={safety_home.get('strip_contact_force_peak_n')}N "
+    f"stable={safety_home.get('objects_stable')}",
+)
+finish(both and terminal_hold_ok)

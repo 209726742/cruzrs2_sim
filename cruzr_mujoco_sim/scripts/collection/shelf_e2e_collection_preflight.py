@@ -31,6 +31,8 @@ DEFAULT_SMOKE = os.path.join(
     ROOT, "out", "smoke", "sdk_recovery_v1_capture_v2_20260813"
 )
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+REQUIRED_READINESS_SEEDS = tuple(range(1, 27))
+MIN_TASK_READINESS_RATE = 0.90
 
 
 def distribute_successes(total: int, count: int) -> list[int]:
@@ -153,8 +155,71 @@ def analyze_sweep(path: str) -> dict:
             (result.get("motion_quality") or {}).get("passed") is True
             for result in results
         ),
+        "terminal_hold_pass_count": sum(
+            (result.get("safety_home") or {}).get("tracking_passed") is True
+            and (result.get("safety_home") or {}).get("release_passed") is True
+            and (result.get("safety_home") or {}).get("objects_stable") is True
+            and isinstance(
+                (result.get("safety_home") or {}).get("strip_contact_force_peak_n"),
+                (int, float),
+            )
+            and (result.get("safety_home") or {}).get(
+                "strip_contact_force_peak_n"
+            ) <= 0.2
+            for result in results
+        ),
+        "collection_ready_pass_count": sum(
+            result.get("passed") is True
+            and (result.get("sdk_alignment") or {}).get("passed") is True
+            and (result.get("motion_quality") or {}).get("passed") is True
+            and (result.get("safety_home") or {}).get("tracking_passed") is True
+            and (result.get("safety_home") or {}).get("release_passed") is True
+            and (result.get("safety_home") or {}).get("objects_stable") is True
+            and isinstance(
+                (result.get("safety_home") or {}).get("strip_contact_force_peak_n"),
+                (int, float),
+            )
+            and (result.get("safety_home") or {}).get(
+                "strip_contact_force_peak_n"
+            ) <= 0.2
+            for result in results
+        ),
         "errors": errors,
     }
+
+
+def readiness_seed_errors(sweep: dict) -> list[str]:
+    seeds = sweep.get("seeds") or []
+    if seeds == list(REQUIRED_READINESS_SEEDS):
+        return []
+    return [
+        "representative readiness sweep must contain exactly seeds 1-26; "
+        f"got {seeds}"
+    ]
+
+
+def readiness_gate_errors(sweep: dict) -> list[str]:
+    result_count = sweep["result_count"]
+    task_pass_count = sweep["task_pass_count"]
+    collection_ready_pass_count = sweep["collection_ready_pass_count"]
+    required_pass_count = math.ceil(result_count * MIN_TASK_READINESS_RATE)
+    errors = []
+    if sweep["sdk_pass_count"] != result_count:
+        errors.append("not every representative seed passes the SDK audit")
+    if sweep["motion_pass_count"] != result_count:
+        errors.append("not every representative seed passes motion quality")
+    if collection_ready_pass_count != task_pass_count:
+        errors.append(
+            f"only {collection_ready_pass_count}/{task_pass_count} successful tasks "
+            "pass all terminal-hold collection gates"
+        )
+    if task_pass_count < required_pass_count:
+        errors.append(
+            f"strict task readiness is {task_pass_count}/{result_count}; formal "
+            f"collection requires at least {MIN_TASK_READINESS_RATE:.0%} "
+            f"({required_pass_count}/{result_count})"
+        )
+    return errors
 
 
 def analyze_smoke(path: str) -> dict:
@@ -265,18 +330,11 @@ def main() -> None:
     sweep = analyze_sweep(args.readiness_sweep)
     if sweep["errors"]:
         blockers.extend(sweep["errors"])
+    blockers.extend(readiness_seed_errors(sweep))
     if sweep["result_count"] == 0:
         blockers.append("representative readiness sweep has no result.json files")
     else:
-        if sweep["sdk_pass_count"] != sweep["result_count"]:
-            blockers.append("not every representative seed passes the SDK audit")
-        if sweep["motion_pass_count"] != sweep["result_count"]:
-            blockers.append("not every representative seed passes motion quality")
-        if sweep["task_pass_count"] != sweep["result_count"]:
-            blockers.append(
-                f"strict task readiness is {sweep['task_pass_count']}/"
-                f"{sweep['result_count']}; formal collection requires all representative seeds"
-            )
+        blockers.extend(readiness_gate_errors(sweep))
 
     smoke = analyze_smoke(args.capture_smoke)
     if not smoke.get("passed"):
@@ -314,6 +372,16 @@ def main() -> None:
         "ready": not blockers,
         "collection_profile": SDK_COLLECTION_PROFILE,
         "camera_contract": list(SDK_CAMERAS),
+        "readiness_policy": {
+            "representative_seeds": list(REQUIRED_READINESS_SEEDS),
+            "minimum_task_pass_rate": MIN_TASK_READINESS_RATE,
+            "minimum_task_pass_count": math.ceil(
+                len(REQUIRED_READINESS_SEEDS) * MIN_TASK_READINESS_RATE
+            ),
+            "sdk_audit_required_for_all": True,
+            "motion_quality_required_for_all": True,
+            "all_gates_required_for_published_episode": True,
+        },
         "gpu_count": args.gpu_count,
         "target_success_total": args.target_success_total,
         "campaign": args.campaign,

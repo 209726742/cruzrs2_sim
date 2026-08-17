@@ -2,7 +2,9 @@
 """Plan or launch a guarded 4/8-GPU dual-material collection campaign.
 
 The default is plan-only. ``--execute`` requires an exact, ready schema-v2
-report from shelf_e2e_collection_preflight.py. Normal, boundary, and recovery
+report from shelf_e2e_collection_preflight.py. An explicitly labeled candidate
+campaign may waive only the representative readiness-rate blocker; all
+per-episode publication gates remain unchanged. Normal, boundary, and recovery
 data use separate waves/run-ids; recovery is labeled, never silent noise.
 """
 
@@ -30,6 +32,9 @@ from shelf_e2e_collection_preflight import visible_gpus
 
 BATCH = os.path.join(HERE, "shelf_e2e_batch.sh")
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+READINESS_BLOCKER_PATTERN = re.compile(
+    r"^strict task readiness is \d+/26; formal collection requires at least 90% \(24/26\)$"
+)
 
 
 def distribute_successes(total: int, count: int) -> list[int]:
@@ -199,7 +204,11 @@ def build_plan(args) -> dict:
         raise ValueError("; ".join(overlaps))
     return {
         "schema_version": 1,
-        "mode": "plan_only" if not args.execute else "guarded_execute",
+        "mode": (
+            "plan_only" if not args.execute else
+            "guarded_candidate_execute" if args.candidate_accept_readiness_blocker
+            else "guarded_execute"
+        ),
         "collection_profile": SDK_COLLECTION_PROFILE,
         "gpu_count": args.gpu_count,
         "target_success_total": args.target_success_total,
@@ -216,17 +225,20 @@ def build_plan(args) -> dict:
             "timeout_seconds": args.timeout,
         },
         "seed_sequences_disjoint": True,
+        "candidate_readiness_override": args.candidate_accept_readiness_blocker,
         "waves": waves,
         "launch_performed": False,
     }
 
 
-def preflight_errors(report: dict, plan: dict) -> list[str]:
+def preflight_errors(
+    report: dict, plan: dict, allow_candidate_readiness: bool = False
+) -> list[str]:
     errors = []
     expected = {
         "schema_version": 2,
         "mode": "plan_only_no_launch",
-        "ready": True,
+        "ready": not allow_candidate_readiness,
         "launch_performed": False,
         "collection_profile": SDK_COLLECTION_PROFILE,
         "gpu_count": plan["gpu_count"],
@@ -242,8 +254,32 @@ def preflight_errors(report: dict, plan: dict) -> list[str]:
                 f"preflight {key}={report.get(key)!r}, expected {value!r}"
             )
     blockers = report.get("blockers")
-    if blockers:
+    if not allow_candidate_readiness and blockers:
         errors.append(f"preflight still has blockers: {blockers}")
+    if allow_candidate_readiness:
+        if not plan["campaign"].startswith("candidate_"):
+            errors.append("readiness override requires a candidate_ campaign")
+        if (
+            not isinstance(blockers, list)
+            or len(blockers) != 1
+            or not isinstance(blockers[0], str)
+            or READINESS_BLOCKER_PATTERN.fullmatch(blockers[0]) is None
+        ):
+            errors.append(
+                "candidate mode may waive only the 16/26-style readiness-rate blocker"
+            )
+        sweep = ((report.get("checks") or {}).get("representative_sweep") or {})
+        result_count = sweep.get("result_count")
+        if (
+            result_count != 26
+            or sweep.get("sdk_pass_count") != result_count
+            or sweep.get("motion_pass_count") != result_count
+            or sweep.get("collection_ready_pass_count") != sweep.get("task_pass_count")
+        ):
+            errors.append(
+                "candidate mode still requires all 26 SDK/motion audits and all "
+                "terminal gates for every successful task"
+            )
     return errors
 
 
@@ -294,7 +330,11 @@ def run_wave(shards: list[dict], resume: bool) -> list[dict]:
 def execute(plan: dict, preflight_path: str, resume: bool) -> int:
     with open(preflight_path, encoding="utf-8") as fh:
         report = json.load(fh)
-    errors = preflight_errors(report, plan)
+    errors = preflight_errors(
+        report,
+        plan,
+        allow_candidate_readiness=plan["candidate_readiness_override"],
+    )
     gpus, gpu_error = visible_gpus()
     if gpu_error:
         errors.append(f"GPU discovery failed: {gpu_error}")
@@ -355,6 +395,11 @@ def parse_args(argv=None):
     parser.add_argument("--preflight-report")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--candidate-accept-readiness-blocker",
+        action="store_true",
+        help="candidate_ campaigns only: waive the readiness-rate blocker, and no other",
+    )
     args = parser.parse_args(argv)
     for name in (
         "target_success_total", "workers", "seed_start", "attempt_factor", "timeout"
@@ -375,6 +420,11 @@ def parse_args(argv=None):
         parser.error("--execute requires --preflight-report")
     if args.resume and not args.execute:
         parser.error("--resume requires --execute")
+    if (
+        args.candidate_accept_readiness_blocker
+        and not args.campaign.startswith("candidate_")
+    ):
+        parser.error("--candidate-accept-readiness-blocker requires candidate_ campaign")
     return args
 
 
