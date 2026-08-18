@@ -21,6 +21,16 @@ SIM_ROOT=$PROJECT_ROOT/cruzr_mujoco_sim
 # 用户常改配置区
 # ==============================================================================
 
+# 记录哪些值由环境变量显式给出。resume 默认继承 checkpoint；只有显式给出的
+# 环境变量或命令行参数才覆盖对应运行参数。
+TARGET_STEPS_FROM_ENV=${TARGET_STEPS+x}
+SAVE_FREQ_FROM_ENV=${SAVE_FREQ+x}
+LOG_FREQ_FROM_ENV=${LOG_FREQ+x}
+BATCH_SIZE_FROM_ENV=${BATCH_SIZE+x}
+NUM_WORKERS_FROM_ENV=${NUM_WORKERS+x}
+JOB_NAME_FROM_ENV=${JOB_NAME+x}
+DECAY_STEPS_FROM_ENV=${DECAY_STEPS+x}
+
 # 本地 LeRobot v3.0 数据集。当前训练代码一次只支持一个 dataset root/repo_id。
 DATASET_ROOT=${DATASET_ROOT:-$SIM_ROOT/out/datasets/formal300_v24_lerobot_v30_20260817}
 DATASET_REPO_ID=${DATASET_REPO_ID:-formal/cruzr_shelf_v24_300source}
@@ -32,33 +42,39 @@ EPISODES=${EPISODES:-train}
 BASE_POLICY=${BASE_POLICY:-$PROJECT_ROOT/pretrained/pi05_base_remapped}
 
 # 每个新实验必须使用独立输出目录，避免覆盖已有 checkpoint。
-OUTPUT_DIR=${OUTPUT_DIR:-$SIM_ROOT/out/training/pi05_formal300_v24_10k_20260817}
+OUTPUT_DIR=${OUTPUT_DIR:-$SIM_ROOT/out/training/pi05_formal300_h100x4_b32_30k_20260818}
 JOB_NAME=${JOB_NAME:-}
 LOG_FILE=${LOG_FILE:-}
 
-# 多卡和 DataLoader 配置。4×H100 且仍用 GPU 0–3 时可以只调整 batch size。
+# 多卡和 DataLoader 配置。默认面向 4×H100 80GB；BATCH_SIZE 是每卡 batch，
+# 有效 batch = BATCH_SIZE × NUM_PROCESSES。正式训练前仍需用短测确认显存。
 GPU_IDS=${GPU_IDS:-0,1,2,3}
 NUM_PROCESSES=${NUM_PROCESSES:-4}
-BATCH_SIZE=${BATCH_SIZE:-1}
-NUM_WORKERS=${NUM_WORKERS:-2}
+BATCH_SIZE=${BATCH_SIZE:-32}
+NUM_WORKERS=${NUM_WORKERS:-8}
 MAIN_PROCESS_PORT=${MAIN_PROCESS_PORT:-29500}
 
 # 主要训练配置。
-TARGET_STEPS=${TARGET_STEPS:-10000}
-SAVE_FREQ=${SAVE_FREQ:-500}
-LOG_FREQ=${LOG_FREQ:-10}
+TARGET_STEPS=${TARGET_STEPS:-30000}
+SAVE_FREQ=${SAVE_FREQ:-1000}
+LOG_FREQ=${LOG_FREQ:-25}
 SEED=${SEED:-1000}
 DTYPE=${DTYPE:-bfloat16}
 GRADIENT_CHECKPOINTING=${GRADIENT_CHECKPOINTING:-true}
 TRAIN_EXPERT_ONLY=${TRAIN_EXPERT_ONLY:-true}
 CUDNN_DETERMINISTIC=${CUDNN_DETERMINISTIC:-false}
+SAVE_CHECKPOINT=${SAVE_CHECKPOINT:-true}
+
+# 防止误用很小的全局 batch 启动长训。短测或复现实验时可以显式放行。
+MIN_EFFECTIVE_BATCH=${MIN_EFFECTIVE_BATCH:-64}
+ALLOW_SMALL_BATCH=${ALLOW_SMALL_BATCH:-false}
 
 # π0.5 优化器、scheduler 与动作配置。
 LEARNING_RATE=${LEARNING_RATE:-2.5e-5}
 WEIGHT_DECAY=${WEIGHT_DECAY:-0.01}
 GRAD_CLIP_NORM=${GRAD_CLIP_NORM:-1.0}
 WARMUP_STEPS=${WARMUP_STEPS:-1000}
-DECAY_STEPS=${DECAY_STEPS:-30000}
+DECAY_STEPS=${DECAY_STEPS:-$TARGET_STEPS}
 N_ACTION_STEPS=${N_ACTION_STEPS:-50}
 NUM_INFERENCE_STEPS=${NUM_INFERENCE_STEPS:-10}
 
@@ -79,6 +95,15 @@ LOG_FREQ_OVERRIDDEN=false
 BATCH_SIZE_OVERRIDDEN=false
 NUM_WORKERS_OVERRIDDEN=false
 JOB_NAME_OVERRIDDEN=false
+DECAY_STEPS_OVERRIDDEN=false
+
+[[ $TARGET_STEPS_FROM_ENV == x ]] && STEPS_OVERRIDDEN=true
+[[ $SAVE_FREQ_FROM_ENV == x ]] && SAVE_FREQ_OVERRIDDEN=true
+[[ $LOG_FREQ_FROM_ENV == x ]] && LOG_FREQ_OVERRIDDEN=true
+[[ $BATCH_SIZE_FROM_ENV == x ]] && BATCH_SIZE_OVERRIDDEN=true
+[[ $NUM_WORKERS_FROM_ENV == x ]] && NUM_WORKERS_OVERRIDDEN=true
+[[ $JOB_NAME_FROM_ENV == x ]] && JOB_NAME_OVERRIDDEN=true
+[[ $DECAY_STEPS_FROM_ENV == x ]] && DECAY_STEPS_OVERRIDDEN=true
 
 usage() {
   cat <<'EOF'
@@ -106,24 +131,27 @@ usage() {
 硬件和 DataLoader：
   --gpu-ids 0,1,2,3
   --num-processes 4
-  --batch-size 1
-  --num-workers 2
+  --batch-size 32
+  --num-workers 8
   --port 29500
 
 主要训练参数：
-  --steps 10000
-  --save-freq 500
-  --log-freq 10
+  --steps 30000
+  --save-freq 1000
+  --log-freq 25
   --seed 1000
   --dtype bfloat16|float32
   --gradient-checkpointing true|false
   --train-expert-only true|false
   --deterministic true|false
+  --save-checkpoint true|false
+  --min-effective-batch 64
+  --allow-small-batch true|false
   --learning-rate 2.5e-5
   --weight-decay 0.01
   --grad-clip-norm 1.0
   --warmup-steps 1000
-  --decay-steps 30000
+  --decay-steps 30000       默认跟随 --steps
   --n-action-steps 50
   --num-inference-steps 10
 
@@ -138,8 +166,17 @@ usage() {
   --isaac-python PATH
 
 示例：
-  # 当前正式 300-source 配置，只检查不启动
+  # 4×H100 正式 300-source 默认配置，只检查不启动
   bash pi05_train.sh dry-run
+
+  # 200 步 canary；使用独立输出目录，并保存 checkpoint 供恢复验证
+  bash pi05_train.sh start --steps 200 --warmup-steps 20 --decay-steps 200 \
+    --save-freq 200 \
+    --output-dir cruzr_mujoco_sim/out/training/pi05_h100x4_canary
+
+  # 将 canary 从 step 200 续到 step 400，验证服务器重启后的恢复路径
+  bash pi05_train.sh resume --steps 400 \
+    --output-dir cruzr_mujoco_sim/out/training/pi05_h100x4_canary
 
   # 自定义数据、训练步数和输出目录
   bash pi05_train.sh start \
@@ -153,8 +190,8 @@ usage() {
   bash pi05_train.sh resume --output-dir cruzr_mujoco_sim/out/training/my_pi05_run
 
 注意：resume 默认使用 checkpoint 保存的数据集、policy、batch、worker、步数和 scheduler。
-只有在 resume 命令中显式传入 --steps/--save-freq/--log-freq/--batch-size/
---num-workers 时，才会覆盖对应恢复值。
+只有在 resume 命令中通过环境变量或命令行显式给出 steps/save-freq/log-freq/batch-size/
+num-workers 时，才会覆盖对应恢复值。
 EOF
 }
 
@@ -214,11 +251,14 @@ parse_args() {
       --gradient-checkpointing) need_value "$@"; GRADIENT_CHECKPOINTING=$2; shift 2 ;;
       --train-expert-only) need_value "$@"; TRAIN_EXPERT_ONLY=$2; shift 2 ;;
       --deterministic) need_value "$@"; CUDNN_DETERMINISTIC=$2; shift 2 ;;
+      --save-checkpoint) need_value "$@"; SAVE_CHECKPOINT=$2; shift 2 ;;
+      --min-effective-batch) need_value "$@"; MIN_EFFECTIVE_BATCH=$2; shift 2 ;;
+      --allow-small-batch) need_value "$@"; ALLOW_SMALL_BATCH=$2; shift 2 ;;
       --learning-rate) need_value "$@"; LEARNING_RATE=$2; shift 2 ;;
       --weight-decay) need_value "$@"; WEIGHT_DECAY=$2; shift 2 ;;
       --grad-clip-norm) need_value "$@"; GRAD_CLIP_NORM=$2; shift 2 ;;
       --warmup-steps) need_value "$@"; WARMUP_STEPS=$2; shift 2 ;;
-      --decay-steps) need_value "$@"; DECAY_STEPS=$2; shift 2 ;;
+      --decay-steps) need_value "$@"; DECAY_STEPS=$2; DECAY_STEPS_OVERRIDDEN=true; shift 2 ;;
       --n-action-steps) need_value "$@"; N_ACTION_STEPS=$2; shift 2 ;;
       --num-inference-steps) need_value "$@"; NUM_INFERENCE_STEPS=$2; shift 2 ;;
       --video-backend) need_value "$@"; VIDEO_BACKEND=$2; shift 2 ;;
@@ -249,9 +289,14 @@ finalize_config() {
   LOG_FILE=$(realpath -m "$LOG_FILE")
   PID_FILE=$LOG_FILE.pid
 
+  # 命令行修改 --steps 时，未显式指定的 decay 自动跟随新的目标步数。
+  [[ $DECAY_STEPS_OVERRIDDEN == true ]] || DECAY_STEPS=$TARGET_STEPS
+
   GRADIENT_CHECKPOINTING=$(normalize_bool GRADIENT_CHECKPOINTING "$GRADIENT_CHECKPOINTING")
   TRAIN_EXPERT_ONLY=$(normalize_bool TRAIN_EXPERT_ONLY "$TRAIN_EXPERT_ONLY")
   CUDNN_DETERMINISTIC=$(normalize_bool CUDNN_DETERMINISTIC "$CUDNN_DETERMINISTIC")
+  SAVE_CHECKPOINT=$(normalize_bool SAVE_CHECKPOINT "$SAVE_CHECKPOINT")
+  ALLOW_SMALL_BATCH=$(normalize_bool ALLOW_SMALL_BATCH "$ALLOW_SMALL_BATCH")
   IMAGE_TRANSFORMS=$(normalize_bool IMAGE_TRANSFORMS "$IMAGE_TRANSFORMS")
   USE_IMAGENET_STATS=$(normalize_bool USE_IMAGENET_STATS "$USE_IMAGENET_STATS")
   WANDB_ENABLE=$(normalize_bool WANDB_ENABLE "$WANDB_ENABLE")
@@ -283,6 +328,7 @@ validate_common_config() {
   validate_positive_int NUM_PROCESSES "$NUM_PROCESSES"
   validate_positive_int BATCH_SIZE "$BATCH_SIZE"
   validate_nonnegative_int NUM_WORKERS "$NUM_WORKERS"
+  validate_positive_int MIN_EFFECTIVE_BATCH "$MIN_EFFECTIVE_BATCH"
   validate_positive_int TARGET_STEPS "$TARGET_STEPS"
   validate_positive_int SAVE_FREQ "$SAVE_FREQ"
   validate_positive_int LOG_FREQ "$LOG_FREQ"
@@ -296,6 +342,16 @@ validate_common_config() {
   validate_number LEARNING_RATE "$LEARNING_RATE"
   validate_number WEIGHT_DECAY "$WEIGHT_DECAY"
   validate_number GRAD_CLIP_NORM "$GRAD_CLIP_NORM"
+
+  local effective_batch=$((BATCH_SIZE * NUM_PROCESSES))
+  if (( effective_batch < MIN_EFFECTIVE_BATCH )) && [[ $ALLOW_SMALL_BATCH == false ]]; then
+    die "有效 batch=$effective_batch（$BATCH_SIZE × $NUM_PROCESSES）低于下限 $MIN_EFFECTIVE_BATCH；短测或复现实验请显式设置 --allow-small-batch true"
+  fi
+}
+
+validate_fresh_schedule() {
+  (( WARMUP_STEPS < DECAY_STEPS )) ||
+    die "WARMUP_STEPS 必须小于 DECAY_STEPS，当前为 $WARMUP_STEPS / $DECAY_STEPS"
 }
 
 validate_hardware() {
@@ -307,8 +363,11 @@ validate_hardware() {
     die "GPU_IDS 有 ${#requested[@]} 项，但 NUM_PROCESSES=$NUM_PROCESSES"
 
   local id candidate found
+  local -A seen=()
   for id in "${requested[@]}"; do
     [[ $id =~ ^[0-9]+$ ]] || die "非法 GPU ID：$id"
+    [[ -z ${seen[$id]:-} ]] || die "GPU_IDS 包含重复 ID：$id"
+    seen[$id]=1
     found=false
     for candidate in "${visible[@]}"; do
       [[ $id == "$candidate" ]] && found=true
@@ -563,7 +622,7 @@ build_fresh_command() {
     --batch_size="$BATCH_SIZE"
     --num_workers="$NUM_WORKERS"
     --steps="$TARGET_STEPS"
-    --save_checkpoint=true
+    --save_checkpoint="$SAVE_CHECKPOINT"
     --save_freq="$SAVE_FREQ"
     --eval_freq=0
     --log_freq="$LOG_FREQ"
@@ -677,6 +736,7 @@ print_command() {
 
 print_summary() {
   local mode=$1
+  local effective_batch=$((BATCH_SIZE * NUM_PROCESSES))
   cat <<EOF
 ---------------- π0.5 训练配置 ----------------
 模式              : $mode
@@ -688,9 +748,12 @@ episode           : $DATASET_DESCRIPTION
 日志              : $LOG_FILE
 任务名            : $JOB_NAME
 GPU / 进程        : $GPU_IDS / $NUM_PROCESSES
-batch / workers   : $BATCH_SIZE / $NUM_WORKERS（每个进程）
+每卡 batch        : $BATCH_SIZE
+有效 batch        : $effective_batch
+每进程 workers    : $NUM_WORKERS
 目标步数          : $TARGET_STEPS
 保存 / 日志频率   : $SAVE_FREQ / $LOG_FREQ
+保存 checkpoint   : $SAVE_CHECKPOINT
 dtype             : $DTYPE
 梯度检查点        : $GRADIENT_CHECKPOINTING
 仅训练 expert     : $TRAIN_EXPERT_ONLY
@@ -743,6 +806,7 @@ exit "$rc"
 
 prepare_fresh() {
   validate_common_config
+  validate_fresh_schedule
   validate_start_paths
   validate_hardware
   validate_port_available
