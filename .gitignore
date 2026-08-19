@@ -28,6 +28,9 @@ smoke_data/
 
 # ===== 大体积网格资源（132M）=====
 cruzr_mujoco_sim/assets/
+Sorting_Roll/Assets/
+Sorting_Roll/Scene_Pic/
+Sorting_Roll/out/
 
 # ===== 生成的场景文件 =====
 **/e2e_dual_scene_*.xml

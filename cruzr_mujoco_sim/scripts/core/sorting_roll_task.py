@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Success contract for placing the rigid roll in the shelf top slot."""
+
+import math
+
+import numpy as np
+
+from sorting_roll_scene import TARGET_AXIS, TARGET_CENTER
+
+
+ROLL_LENGTH_M = 0.5
+ROLL_COLLISION_RADIUS_M = 0.012
+SHELF_INNER_HALF_WIDTH_M = 0.300
+TARGET_X_TOLERANCE_M = 0.003
+TARGET_Y_TOLERANCE_M = 0.055
+TARGET_Z_TOLERANCE_M = 0.012
+TARGET_AXIS_TOLERANCE_DEG = 10.0
+SUPPORT_FORCE_MIN_N = 0.5
+RELEASE_FORCE_MAX_N = 0.2
+LINEAR_SPEED_MAX_M_S = 0.02
+ANGULAR_SPEED_MAX_RAD_S = 0.10
+REQUIRED_STABLE_SECONDS = 0.5
+
+INSTANTANEOUS_CHECKS = (
+    "center_in_slot",
+    "fully_inside_shelf_width",
+    "axis_aligned_with_slot",
+    "supported_by_slot_floor",
+    "released_from_both_grippers",
+    "not_supported_by_table",
+    "low_linear_speed",
+    "low_angular_speed",
+)
+
+
+def axis_alignment_degrees(axis, target=TARGET_AXIS):
+    axis = np.array(axis, dtype=float, copy=True)
+    target = np.array(target, dtype=float, copy=True)
+    axis /= np.linalg.norm(axis)
+    target /= np.linalg.norm(target)
+    cosine = float(np.clip(abs(np.dot(axis, target)), 0.0, 1.0))
+    return math.degrees(math.acos(cosine))
+
+
+def _named_id(mujoco, model, object_type, name):
+    object_id = mujoco.mj_name2id(model, object_type, name)
+    if object_id < 0:
+        raise RuntimeError(f"scene is missing {name}")
+    return object_id
+
+
+def _contact_force(mujoco, model, data, first, second):
+    force = np.zeros(6, dtype=float)
+    total = 0.0
+    for index in range(data.ncon):
+        pair = {int(data.contact[index].geom1), int(data.contact[index].geom2)}
+        if pair & first and pair & second:
+            mujoco.mj_contactForce(model, data, index, force)
+            total += abs(float(force[0]))
+    return total
+
+
+def evaluate_placement(model, data):
+    import mujoco
+
+    roll_body = _named_id(
+        mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "sorting_roll"
+    )
+    roll_geom = _named_id(
+        mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "sorting_roll_col"
+    )
+    slot_floor = _named_id(
+        mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "target_slot_floor_col"
+    )
+    table_top = _named_id(
+        mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "table_top_col"
+    )
+    pad_ids = {
+        _named_id(mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        for name in ("L_pad1", "L_pad2", "R_pad1", "R_pad2")
+    }
+
+    mujoco.mj_forward(model, data)
+    center = data.xpos[roll_body].copy()
+    rotation = data.xmat[roll_body].reshape(3, 3)
+    roll_axis = rotation[:, 0].copy()
+    alignment_degrees = axis_alignment_degrees(roll_axis)
+    half_y_span = (
+        0.5 * ROLL_LENGTH_M * abs(float(roll_axis[1]))
+        + ROLL_COLLISION_RADIUS_M
+        * math.sqrt(max(0.0, 1.0 - float(roll_axis[1]) ** 2))
+    )
+
+    slot_support = _contact_force(
+        mujoco, model, data, {roll_geom}, {slot_floor}
+    )
+    table_support = _contact_force(
+        mujoco, model, data, {roll_geom}, {table_top}
+    )
+    gripper_force = _contact_force(
+        mujoco, model, data, {roll_geom}, pad_ids
+    )
+    angular_speed = float(np.linalg.norm(data.cvel[roll_body, :3]))
+    linear_speed = float(np.linalg.norm(data.cvel[roll_body, 3:]))
+
+    checks = {
+        "center_in_slot": bool(
+            abs(center[0] - TARGET_CENTER[0]) <= TARGET_X_TOLERANCE_M
+            and abs(center[1] - TARGET_CENTER[1]) <= TARGET_Y_TOLERANCE_M
+            and abs(center[2] - TARGET_CENTER[2]) <= TARGET_Z_TOLERANCE_M
+        ),
+        "fully_inside_shelf_width": bool(
+            center[1] - half_y_span >= -SHELF_INNER_HALF_WIDTH_M
+            and center[1] + half_y_span <= SHELF_INNER_HALF_WIDTH_M
+        ),
+        "axis_aligned_with_slot": bool(
+            alignment_degrees <= TARGET_AXIS_TOLERANCE_DEG
+        ),
+        "supported_by_slot_floor": bool(slot_support >= SUPPORT_FORCE_MIN_N),
+        "released_from_both_grippers": bool(gripper_force <= RELEASE_FORCE_MAX_N),
+        "not_supported_by_table": bool(table_support < SUPPORT_FORCE_MIN_N),
+        "low_linear_speed": bool(linear_speed <= LINEAR_SPEED_MAX_M_S),
+        "low_angular_speed": bool(angular_speed <= ANGULAR_SPEED_MAX_RAD_S),
+    }
+    return {
+        "center_m": np.round(center, 6).tolist(),
+        "axis": np.round(roll_axis, 6).tolist(),
+        "axis_error_deg": round(alignment_degrees, 4),
+        "half_y_span_m": round(half_y_span, 6),
+        "slot_support_force_n": round(slot_support, 4),
+        "table_support_force_n": round(table_support, 4),
+        "gripper_contact_force_n": round(gripper_force, 4),
+        "linear_speed_m_s": round(linear_speed, 6),
+        "angular_speed_rad_s": round(angular_speed, 6),
+        "checks": checks,
+        "instantaneous_success": all(checks[name] for name in INSTANTANEOUS_CHECKS),
+    }
+
+
+class SortingRollSuccessTracker:
+    def __init__(self, required_seconds=REQUIRED_STABLE_SECONDS):
+        self.required_seconds = float(required_seconds)
+        self.stable_seconds = 0.0
+
+    def update(self, evidence, dt):
+        if dt <= 0.0:
+            raise ValueError("dt must be positive")
+        if evidence.get("instantaneous_success") is True:
+            self.stable_seconds += float(dt)
+        else:
+            self.stable_seconds = 0.0
+        return self.stable_seconds + 1e-12 >= self.required_seconds
+
+
+def place_roll_at_target(model, data, height_offset_m=0.002):
+    import mujoco
+
+    joint = _named_id(
+        mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, "sorting_roll_free"
+    )
+    qpos_adr = int(model.jnt_qposadr[joint])
+    dof_adr = int(model.jnt_dofadr[joint])
+    data.qpos[qpos_adr:qpos_adr + 3] = TARGET_CENTER + [0.0, 0.0, height_offset_m]
+    data.qpos[qpos_adr + 3:qpos_adr + 7] = [
+        math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)
+    ]
+    data.qvel[dof_adr:dof_adr + 6] = 0.0
+    mujoco.mj_forward(model, data)
+
+
+def target_placement_smoke(model, steps=1200):
+    import mujoco
+
+    data = mujoco.MjData(model)
+    place_roll_at_target(model, data)
+    tracker = SortingRollSuccessTracker()
+    latched = False
+    evidence = None
+    executed_steps = 0
+    for executed_steps in range(1, steps + 1):
+        mujoco.mj_step(model, data)
+        evidence = evaluate_placement(model, data)
+        latched = tracker.update(evidence, float(model.opt.timestep))
+        if latched:
+            break
+    evidence = dict(evidence)
+    evidence["stable_seconds"] = round(tracker.stable_seconds, 4)
+    evidence["required_stable_seconds"] = tracker.required_seconds
+    evidence["simulated_seconds"] = round(
+        executed_steps * float(model.opt.timestep), 4
+    )
+    evidence["success"] = bool(latched)
+    return data, evidence

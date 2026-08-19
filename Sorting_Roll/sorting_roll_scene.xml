@@ -1,0 +1,136 @@
+<mujoco model="cruzr_sorting_roll_scene">
+  <!--
+    Source template for the Sorting Roll task.
+
+    Run scripts/core/sorting_roll_scene.py before loading this scene. The script copies
+    this template to cruzr_mujoco_sim/assets/sorting_roll_scene.xml, where the included
+    robot and all mesh paths resolve against the shared CRUZR meshdir.
+
+    World convention: +X robot-forward, +Y robot-left, -Y robot-right, +Z up.
+    Visual OBJ meshes are deliberately non-colliding; named primitive geoms in group 3
+    are the physics representation.
+  -->
+  <include file="cruzr_pgc140.xml"/>
+
+  <option timestep="0.001" integrator="implicitfast" cone="elliptic" impratio="10"/>
+  <statistic center="0.45 -0.72 0.72" extent="2.4"/>
+  <visual>
+    <global offwidth="1280" offheight="960"/>
+    <quality shadowsize="4096"/>
+    <headlight ambient="0.45 0.45 0.47" diffuse="0.62 0.62 0.62"/>
+  </visual>
+
+  <asset>
+    <texture name="sorting_floor_texture" type="2d" builtin="checker"
+             rgb1="0.78 0.79 0.81" rgb2="0.89 0.90 0.92"
+             width="512" height="512"/>
+    <texture name="sorting_roll_texture" type="2d"
+             file="../../Sorting_Roll/Assets/Roll/Meshy_AI__0819075833_texture_obj/Meshy_AI__0819075833_texture.png"/>
+    <texture name="sorting_shelf_texture" type="2d"
+             file="../../Sorting_Roll/Assets/Shelf/Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture_obj/Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture.png"/>
+    <texture name="sorting_table_texture" type="2d"
+             file="../../Sorting_Roll/Assets/Table/Meshy_AI__0819090550_texture_obj/Meshy_AI__0819090550_texture.png"/>
+
+    <material name="sorting_floor_material" texture="sorting_floor_texture"
+              texrepeat="8 8" reflectance="0.08"/>
+    <material name="sorting_roll_material" texture="sorting_roll_texture"
+              specular="0.12" shininess="0.15"/>
+    <material name="sorting_shelf_material" texture="sorting_shelf_texture"
+              specular="0.16" shininess="0.20"/>
+    <material name="sorting_table_material" texture="sorting_table_texture"
+              specular="0.12" shininess="0.16"/>
+
+    <!-- Exact per-axis scales from the OBJ bounding boxes to the measured dimensions. -->
+    <mesh name="sorting_roll_mesh"
+          file="../../../Sorting_Roll/Assets/Roll/Meshy_AI__0819075833_texture_obj/Meshy_AI__0819075833_texture.obj"
+          scale="0.25 0.257222817 0.257138155"/>
+    <mesh name="sorting_shelf_mesh"
+          file="../../../Sorting_Roll/Assets/Shelf/Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture_obj/Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture.obj"
+          scale="0.755011841 0.735548701 0.591474487"/>
+    <mesh name="sorting_table_mesh"
+          file="../../../Sorting_Roll/Assets/Table/Meshy_AI__0819090550_texture_obj/Meshy_AI__0819090550_texture.obj"
+          scale="0.3 0.557554077 0.441333234"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0.2 -0.5 3.0" dir="0.1 0.1 -1" diffuse="0.78 0.78 0.78"/>
+    <light pos="2.4 1.8 2.5" dir="-0.5 -0.4 -1" diffuse="0.34 0.34 0.34"/>
+    <light pos="-1.8 -2.6 2.4" dir="0.4 0.5 -1" diffuse="0.30 0.30 0.30"/>
+
+    <geom name="sorting_floor" type="plane" size="6 6 0.1" pos="0 0 0"
+          material="sorting_floor_material" group="0" condim="3"
+          friction="1.0 0.01 0.001"/>
+
+    <!-- Shelf visual: raw X=front width, Y=height, Z=depth. Raw +Z faces the robot. -->
+    <body name="sorting_shelf" pos="1.2 0 0.7" quat="0.5 0.5 -0.5 -0.5">
+      <geom name="sorting_shelf_visual" type="mesh" mesh="sorting_shelf_mesh"
+            material="sorting_shelf_material" contype="0" conaffinity="0"
+            group="1" density="0"/>
+    </body>
+
+    <!-- Static shelf collision: four posts and four tier bottoms. -->
+    <geom name="shelf_post_front_left_col" type="box" pos="1.025 0.300 0.700"
+          size="0.015 0.015 0.700" group="3" contype="1" conaffinity="3"/>
+    <geom name="shelf_post_front_right_col" type="box" pos="1.025 -0.300 0.700"
+          size="0.015 0.015 0.700" group="3" contype="1" conaffinity="3"/>
+    <geom name="shelf_post_rear_left_col" type="box" pos="1.375 0.300 0.700"
+          size="0.015 0.015 0.700" group="3" contype="1" conaffinity="3"/>
+    <geom name="shelf_post_rear_right_col" type="box" pos="1.375 -0.300 0.700"
+          size="0.015 0.015 0.700" group="3" contype="1" conaffinity="3"/>
+    <geom name="shelf_tier1_col" type="box" pos="1.200 0 0.175"
+          size="0.190 0.300 0.0075" group="3" contype="1" conaffinity="3"
+          friction="1.1 0.01 0.001"/>
+    <geom name="shelf_tier2_col" type="box" pos="1.200 0 0.445"
+          size="0.190 0.300 0.0075" group="3" contype="1" conaffinity="3"
+          friction="1.1 0.01 0.001"/>
+    <geom name="shelf_tier3_col" type="box" pos="1.200 0 0.715"
+          size="0.190 0.300 0.0075" group="3" contype="1" conaffinity="3"
+          friction="1.1 0.01 0.001"/>
+    <geom name="shelf_tier4_col" type="box" pos="1.205 0 0.995"
+          size="0.195 0.300 0.005" group="3" contype="1" conaffinity="3"
+          friction="1.2 0.02 0.001"/>
+
+    <!-- Top-tier 25 mm slot. The rigid roll collider is 24 mm in diameter. -->
+    <geom name="target_slot_floor_col" type="box" pos="0.9825 0 0.995"
+          size="0.0125 0.300 0.005" group="3" contype="1" conaffinity="3"
+          friction="1.35 0.02 0.001"/>
+    <geom name="target_slot_front_guard_col" type="box" pos="0.9625 0 1.025"
+          size="0.0075 0.300 0.025" group="3" contype="1" conaffinity="3"
+          friction="1.2 0.02 0.001"/>
+    <geom name="target_slot_back_guard_col" type="box" pos="1.0025 0 1.025"
+          size="0.0075 0.300 0.025" group="3" contype="1" conaffinity="3"
+          friction="1.2 0.02 0.001"/>
+    <geom name="target_middle_bar_col" type="box" pos="1.010 0 1.130"
+          size="0.0125 0.300 0.010" group="3" contype="1" conaffinity="3"/>
+    <geom name="target_top_bar_col" type="box" pos="1.010 0 1.190"
+          size="0.0125 0.300 0.010" group="3" contype="1" conaffinity="3"/>
+    <site name="sorting_roll_target" type="box" pos="0.9825 0 1.0125"
+          size="0.018 0.255 0.018" rgba="0.10 0.85 0.25 0.20" group="4"/>
+
+    <!-- Table visual: 0.60 m along world X, 0.52 m along world Y, 1.00 m high. -->
+    <body name="sorting_table" pos="0 -1.575 0.5" quat="0 0 0.707106781 0.707106781">
+      <geom name="sorting_table_visual" type="mesh" mesh="sorting_table_mesh"
+            material="sorting_table_material" contype="0" conaffinity="0"
+            group="1" density="0"/>
+    </body>
+    <geom name="table_top_col" type="box" pos="0 -1.575 0.980"
+          size="0.300 0.260 0.020" group="3" contype="1" conaffinity="3"
+          friction="1.1 0.02 0.001"/>
+    <geom name="table_pedestal_col" type="box" pos="0.120 -1.575 0.480"
+          size="0.045 0.045 0.480" group="3" contype="1" conaffinity="3"/>
+    <geom name="table_base_col" type="box" pos="0.120 -1.575 0.035"
+          size="0.240 0.205 0.035" group="3" contype="1" conaffinity="3"/>
+
+    <!-- Manipuland: visual mesh plus a stable, low-cost rigid-cylinder collider. -->
+    <body name="sorting_roll" pos="0 -1.575 1.0135">
+      <freejoint name="sorting_roll_free"/>
+      <geom name="sorting_roll_visual" type="mesh" mesh="sorting_roll_mesh"
+            material="sorting_roll_material" contype="0" conaffinity="0"
+            group="1" density="0"/>
+      <geom name="sorting_roll_col" type="cylinder" size="0.012 0.250"
+            quat="0.707106781 0 0.707106781 0" mass="0.25"
+            group="3" condim="4" friction="1.25 0.02 0.001"
+            solref="0.004 1" solimp="0.95 0.995 0.001"/>
+    </body>
+  </worldbody>
+</mujoco>
