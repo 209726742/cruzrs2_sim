@@ -9,8 +9,11 @@ from sorting_roll_scene import TARGET_AXIS, TARGET_CENTER
 
 
 ROLL_LENGTH_M = 0.5
+ROLL_VISUAL_DIAMETER_M = 0.025
 ROLL_COLLISION_RADIUS_M = 0.012
 SHELF_INNER_HALF_WIDTH_M = 0.300
+SLOT_CLEAR_WIDTH_M = 0.025
+SLOT_FLOOR_TO_MIDDLE_BAR_LOWER_EDGE_M = 0.120
 TARGET_X_TOLERANCE_M = 0.003
 TARGET_Y_TOLERANCE_M = 0.055
 TARGET_Z_TOLERANCE_M = 0.012
@@ -31,6 +34,48 @@ INSTANTANEOUS_CHECKS = (
     "low_linear_speed",
     "low_angular_speed",
 )
+
+
+def fit_report():
+    shelf_usable_width = 2.0 * SHELF_INNER_HALF_WIDTH_M
+    length_clearance = shelf_usable_width - ROLL_LENGTH_M
+    simulated_diameter = 2.0 * ROLL_COLLISION_RADIUS_M
+    simulated_slot_clearance = SLOT_CLEAR_WIDTH_M - simulated_diameter
+    physical_nominal_slot_clearance = (
+        SLOT_CLEAR_WIDTH_M - ROLL_VISUAL_DIAMETER_M
+    )
+    middle_bar_clearance = (
+        SLOT_FLOOR_TO_MIDDLE_BAR_LOWER_EDGE_M - ROLL_VISUAL_DIAMETER_M
+    )
+    checks = {
+        "roll_length_fits_shelf_inner_width": bool(length_clearance > 0.0),
+        "simulated_collider_fits_slot": bool(simulated_slot_clearance > 0.0),
+        "middle_bar_has_vertical_clearance": bool(middle_bar_clearance > 0.0),
+        "physical_nominal_has_positive_slot_clearance": bool(
+            physical_nominal_slot_clearance > 0.0
+        ),
+    }
+    return {
+        "shelf_usable_width_m": shelf_usable_width,
+        "roll_length_m": ROLL_LENGTH_M,
+        "length_clearance_total_m": length_clearance,
+        "length_clearance_each_end_m": length_clearance / 2.0,
+        "slot_clear_width_m": SLOT_CLEAR_WIDTH_M,
+        "roll_visual_diameter_m": ROLL_VISUAL_DIAMETER_M,
+        "roll_collider_diameter_m": simulated_diameter,
+        "simulated_slot_clearance_m": simulated_slot_clearance,
+        "physical_nominal_slot_clearance_m": physical_nominal_slot_clearance,
+        "middle_bar_vertical_clearance_m": middle_bar_clearance,
+        "checks": checks,
+        "simulation_fits": all(
+            checks[name]
+            for name in (
+                "roll_length_fits_shelf_inner_width",
+                "simulated_collider_fits_slot",
+                "middle_bar_has_vertical_clearance",
+            )
+        ),
+    }
 
 
 def axis_alignment_degrees(axis, target=TARGET_AXIS):

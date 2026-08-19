@@ -19,6 +19,45 @@ class SortingRollSceneTest(unittest.TestCase):
         report = scene.layout_report()
         self.assertTrue(all(report["checks"].values()), report)
         self.assertAlmostEqual(report["edge_gap_m"], 1.0)
+        self.assertAlmostEqual(report["table_yaw_deg"], 180.0)
+        self.assertAlmostEqual(
+            report["roll_depth_from_robot_side_m"], 0.52 / 3.0
+        )
+        self.assertAlmostEqual(
+            report["roll_depth_fraction_from_robot_side"], 1.0 / 3.0
+        )
+
+    def test_table_rotation_and_roll_spawn_are_encoded_in_xml(self):
+        root = ET.parse(scene.TEMPLATE_PATH).getroot()
+        bodies = {
+            element.attrib["name"]: element.attrib
+            for element in root.iter("body")
+            if "name" in element.attrib
+        }
+        geoms = {
+            element.attrib["name"]: element.attrib
+            for element in root.iter("geom")
+            if "name" in element.attrib
+        }
+        np.testing.assert_allclose(
+            np.fromstring(bodies["sorting_table"]["quat"], sep=" "),
+            [np.sqrt(0.5), np.sqrt(0.5), 0.0, 0.0],
+            atol=1e-9,
+        )
+        np.testing.assert_allclose(
+            np.fromstring(bodies["sorting_roll"]["pos"], sep=" "),
+            scene.ROLL_SPAWN,
+            atol=1e-9,
+        )
+        self.assertAlmostEqual(
+            np.fromstring(geoms["table_pedestal_col"]["pos"], sep=" ")[0],
+            -0.120,
+        )
+        self.assertAlmostEqual(
+            np.fromstring(geoms["table_base_col"]["pos"], sep=" ")[0],
+            -0.120,
+        )
+        self.assertEqual(geoms["sorting_roll_col"]["condim"], "6")
 
     def test_template_contains_named_task_geometry(self):
         root = ET.parse(scene.TEMPLATE_PATH).getroot()

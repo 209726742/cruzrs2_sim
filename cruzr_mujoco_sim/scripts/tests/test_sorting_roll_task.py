@@ -13,10 +13,23 @@ if CORE not in sys.path:
 from sorting_roll_task import (
     SortingRollSuccessTracker,
     axis_alignment_degrees,
+    fit_report,
 )
 
 
 class SortingRollTaskTest(unittest.TestCase):
+    def test_roll_fits_simulated_slot_but_physical_nominal_is_line_to_line(self):
+        report = fit_report()
+        self.assertTrue(report["simulation_fits"], report)
+        self.assertAlmostEqual(report["length_clearance_total_m"], 0.100)
+        self.assertAlmostEqual(report["length_clearance_each_end_m"], 0.050)
+        self.assertAlmostEqual(report["simulated_slot_clearance_m"], 0.001)
+        self.assertAlmostEqual(report["physical_nominal_slot_clearance_m"], 0.0)
+        self.assertAlmostEqual(report["middle_bar_vertical_clearance_m"], 0.095)
+        self.assertFalse(
+            report["checks"]["physical_nominal_has_positive_slot_clearance"]
+        )
+
     def test_axis_alignment_accepts_both_slot_directions(self):
         self.assertAlmostEqual(axis_alignment_degrees([0, 1, 0]), 0.0)
         self.assertAlmostEqual(axis_alignment_degrees([0, -1, 0]), 0.0)

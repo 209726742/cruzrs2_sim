@@ -19,8 +19,16 @@ SCENE_PATH = PACKAGE_ROOT / "assets" / "sorting_roll_scene.xml"
 
 SHELF_BOUNDS = np.array([[1.0, -0.315, 0.0], [1.4, 0.315, 1.4]])
 TABLE_BOUNDS = np.array([[-0.3, -1.835, 0.0], [0.3, -1.315, 1.0]])
+TABLE_YAW_DEG = 180.0
+ROLL_DEPTH_FRACTION_FROM_ROBOT_SIDE = 1.0 / 3.0
 ROLL_SIZE = np.array([0.5, 0.025, 0.025])
-ROLL_SPAWN = np.array([0.0, -1.575, 1.0135])
+TABLE_DEPTH_M = float(TABLE_BOUNDS[1, 1] - TABLE_BOUNDS[0, 1])
+ROLL_SPAWN = np.array([
+    0.0,
+    TABLE_BOUNDS[1, 1]
+    - TABLE_DEPTH_M * ROLL_DEPTH_FRACTION_FROM_ROBOT_SIDE,
+    1.0135,
+])
 TARGET_CENTER = np.array([0.9825, 0.0, 1.0125])
 TARGET_AXIS = np.array([0.0, 1.0, 0.0])
 EXPECTED_EDGE_GAP_M = 1.0
@@ -49,6 +57,7 @@ def required_assets():
 
 def layout_report():
     edge_gap = SHELF_BOUNDS[0, 1] - TABLE_BOUNDS[1, 1]
+    roll_depth_from_robot_side = TABLE_BOUNDS[1, 1] - ROLL_SPAWN[1]
     shelf_size = SHELF_BOUNDS[1] - SHELF_BOUNDS[0]
     table_size = TABLE_BOUNDS[1] - TABLE_BOUNDS[0]
     checks = {
@@ -61,6 +70,13 @@ def layout_report():
         "table_is_robot_right": bool(TABLE_BOUNDS[1, 1] < 0.0),
         "shelf_is_robot_front": bool(SHELF_BOUNDS[0, 0] > 0.0),
         "edge_gap_is_1m": bool(abs(edge_gap - EXPECTED_EDGE_GAP_M) < 1e-9),
+        "table_yaw_is_180deg": bool(abs(TABLE_YAW_DEG - 180.0) < 1e-9),
+        "roll_at_robot_side_third": bool(
+            abs(
+                roll_depth_from_robot_side
+                - TABLE_DEPTH_M * ROLL_DEPTH_FRACTION_FROM_ROBOT_SIDE
+            ) < 1e-9
+        ),
         "roll_starts_above_table": bool(
             TABLE_BOUNDS[0, 0] <= ROLL_SPAWN[0] <= TABLE_BOUNDS[1, 0]
             and TABLE_BOUNDS[0, 1] <= ROLL_SPAWN[1] <= TABLE_BOUNDS[1, 1]
@@ -74,6 +90,11 @@ def layout_report():
         "table_bounds_m": TABLE_BOUNDS.tolist(),
         "roll_size_m": ROLL_SIZE.tolist(),
         "roll_spawn_m": ROLL_SPAWN.tolist(),
+        "table_yaw_deg": TABLE_YAW_DEG,
+        "roll_depth_from_robot_side_m": float(roll_depth_from_robot_side),
+        "roll_depth_fraction_from_robot_side": (
+            float(roll_depth_from_robot_side / TABLE_DEPTH_M)
+        ),
         "target_center_m": TARGET_CENTER.tolist(),
         "edge_gap_m": float(edge_gap),
         "checks": checks,
@@ -229,12 +250,17 @@ def main(argv=None):
     if args.render:
         os.environ.setdefault("MUJOCO_GL", "egl")
     model, data, runtime = smoke_check(scene_path, steps=args.steps)
-    from sorting_roll_task import evaluate_placement, target_placement_smoke
+    from sorting_roll_task import (
+        evaluate_placement,
+        fit_report,
+        target_placement_smoke,
+    )
 
     initial_task = evaluate_placement(model, data)
     target_data, target = target_placement_smoke(model, steps=args.target_steps)
     report = {
         "layout": layout,
+        "fit": fit_report(),
         "runtime": runtime,
         "initial_task_state": initial_task,
         "target_placement": target,
