@@ -229,3 +229,15 @@ checkpoint 配置明确保存 `chunk_size=50` 和 `n_action_steps=50`。原 roll
 综合所有证据，当前问题不是单纯的 30K 后期过拟合，也没有一个现成中间 checkpoint 可以直接替代。更合理的后续训练工作是：固定并记录与数据采集一致的场景/渲染版本；改善起始阶段的可观测性，因为三路相机初始看不到任务物体；增加真正由策略偏离后再纠正的闭环 recovery 数据，而不是只靠专家轨迹切片；避免同一长任务在缺少阶段信息时产生难以辨认的状态切换；并在正式长训前先用未见 seed 的短闭环成功门槛筛选 canary。是否把底盘位姿、阶段子指令或更合适的前视相机加入策略观测，会改变真实部署契约，不能在本轮推理工作中擅自决定。
 
 截至这里没有修改任何现有 Python 或 shell 源码，因此没有需要备份的代码文件。所有新增内容仅为本文档、被 `.gitignore` 管理的 rollout 视频/JSON/日志和 `/tmp` 诊断图。用户要求的备份约束一直得到遵守：如果下一阶段明确选择修改 rollout 诊断输出或重新设计数据生成代码，应先建立带 UTC 时间戳和校验值的源码备份，再应用最小补丁并运行回归测试。
+
+## 官方推理入口等价性审计
+
+为了进一步排除项目自定义策略服务与 LeRobot 官方动作选择入口之间存在隐藏差异，2026-08-20 又完成了一次固定输入、固定随机数的确定性等价性审计。审计没有使用全零假观测，而是从正式数据集 `formal300_v24_lerobot_v30_20260817` 中读取 episode 0、frame 0 的真实 state18 和三路 H.264 首帧，语言指令也使用训练时的完整英文任务文本。输入快照、每个数组的 SHA256、数据集帧位置和相机来源均已保存。模型使用 `030000/pretrained_model`，随机种子固定为 `20260820`；checkpoint 配置仍为 `chunk_size=50`、`n_action_steps=50` 和 `num_inference_steps=10`。
+
+审计在同一个已成功严格加载的 `PI05Policy` 实例上依次执行三条路径。第一条是当前项目实际使用的 `LeRobotPolicyAdapter.infer()`；第二条绕过 adapter 的 `infer()` 方法，直接执行 checkpoint preprocessor、`PI05Policy.predict_action_chunk()` 和整块 postprocessor；第三条按照 LeRobot 官方同步控制语义，每个控制 tick 执行 preprocessor、`PI05Policy.select_action()` 和单步 postprocessor，连续取满内部队列中的 50 个动作。每条路径开始前都重置 policy、preprocessor 和 postprocessor，并重新设置完全相同的 Python、NumPy、PyTorch 和 CUDA 随机种子，因此比较的是同一次流采样条件下的纯实现差异。
+
+结果为严格通过。三条路径都返回形状 `(50, 18)` 的有限 `float32` 动作；当前 adapter 对直接 `predict_action_chunk()`、当前 adapter 对 50 次 `select_action()`、以及直接 chunk 对 `select_action()` 的逐元素最大绝对误差、平均绝对误差和 RMS 误差全部为 `0.0`，三份输出也通过 `numpy.array_equal`。三份动作数组的 SHA256 完全相同，均为 `449629f67c84196283e454391ce8b747fb5eab7e8ec284519c949716deee6bf0`。这同时证明，对于当前 checkpoint 保存的“分位数反归一化 + CPU device”后处理链，把整个三维动作块一次性送入 postprocessor 与官方异步服务逐动作后处理在数值上完全一致。
+
+这项审计的结论是：当前自定义 WebSocket adapter 没有改变 π0.5 的预测数值，直接改用 LeRobot `select_action()` 也不会改善已经观察到的闭环行为。它只证明当前软件版本、当前 checkpoint 和这份固定真实观测下的推理入口等价，并不证明 checkpoint 在未见场景中具有闭环泛化能力，也没有比较经过格式转换后的 OpenPI checkpoint 或新版本 RTC 的实时调度效果。结合前面的训练帧拟合、训练内 seed 闭环和新 seed 长视频证据，可以更有把握地把后续工作集中在训练数据、策略偏离后的 recovery、任务阶段信息、初始视觉可观测性和历史场景渲染一致性，而不是继续替换等价的推理包装代码。
+
+完整机器可读结果位于 `cruzr_mujoco_sim/out/diagnostics/pi05_30k_official_equivalence_20260820/equivalence_result.json`；固定输入位于同目录的 `fixed_observation.npz` 和 `input_manifest.json`；三份原始动作位于 `action_outputs.npz`；完整控制台输出位于 `equivalence.log`。这些诊断产物由 `.gitignore` 管理，不会提交权重、数据帧或机器私有路径。本轮仍未修改任何 Python 或 shell 源码，因此没有触发源码备份；唯一的受版本控制改动是本说明文档新增了审计记录。
