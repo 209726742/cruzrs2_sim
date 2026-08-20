@@ -13,7 +13,7 @@
 | [Pi05推理与视频指南](current/Pi05推理与视频指南_0820.md) | 30K checkpoint 推理、闭环运行和视频录制 | 运行策略推理或生成视频时 |
 | `current/CRUZR_S2真机SDK对齐说明_0820.md` | 仿真数据与真机 SDK 的关节、夹爪、底盘和相机契约 | 准备真机接入时；本机内部文档，不提交 Git |
 | [Sorting Roll场景进度](current/Sorting_Roll场景进度_0820.md) | 架子、桌子、棒子场景布局、低模资产、GPU查看器和验证结果 | 搭建、检查或运行 Sorting Roll 场景时 |
-| [Sorting Roll数据采集指南](current/Sorting_Roll数据采集指南_0820.md) | 当前 pilot 录制步骤、数据检查和正式采集准入条件 | 开始采集 Sorting Roll 数据前 |
+| [Sorting Roll数据采集指南](current/Sorting_Roll数据采集指南_0820.md) | pilot 录制、正式准入及 1/4/8 卡成本与时间方案 | 开始采集或安排多 GPU 批次前 |
 
 ## 历史归档
 
