@@ -28,8 +28,30 @@ case "$MODE" in
     ;;
   view)
     "$PYTHON_BIN" "$SCENE_TOOL" --build-only
+    VIEWER_MODE=${TELEOP_VIEWER:-egl}
+    case "$VIEWER_MODE" in
+      egl)
+        if ! "$PYTHON_BIN" -c 'import cv2' >/dev/null 2>&1; then
+          echo "EGL 可视化缺少依赖: $PYTHON_BIN -m pip install 'numpy<2' opencv-python==4.11.0.86" >&2
+          exit 1
+        fi
+        GL_BACKEND=egl
+        ;;
+      passive|glfw)
+        GL_BACKEND=glfw
+        ;;
+      *)
+        echo "不支持的 TELEOP_VIEWER: $VIEWER_MODE (可选: egl, passive, glfw)" >&2
+        exit 2
+        ;;
+    esac
     TELEOP_SCENE_XML=$GENERATED_SCENE \
-      MUJOCO_GL=${MUJOCO_GL:-glfw} \
+      TELEOP_VIEWER=$VIEWER_MODE \
+      TELEOP_EGL_FAST=${TELEOP_EGL_FAST:-1} \
+      EGL_W=${EGL_W:-640} \
+      EGL_H=${EGL_H:-360} \
+      TELEOP_FPS=${TELEOP_FPS:-30} \
+      MUJOCO_GL=$GL_BACKEND \
       "$PYTHON_BIN" "$WORKSPACE_ROOT/cruzr_mujoco_sim/scripts/core/cruzr_teleop.py"
     ;;
   *)

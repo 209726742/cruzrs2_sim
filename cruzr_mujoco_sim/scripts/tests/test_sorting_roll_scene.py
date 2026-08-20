@@ -77,6 +77,19 @@ class SortingRollSceneTest(unittest.TestCase):
             "sorting_roll_target",
         }.issubset(names))
 
+    def test_view_command_defaults_to_egl_with_cpu_override(self):
+        script = (scene.SORTING_ROOT / "run_scene.sh").read_text()
+        self.assertIn("VIEWER_MODE=${TELEOP_VIEWER:-egl}", script)
+        self.assertIn("GL_BACKEND=egl", script)
+        self.assertIn("GL_BACKEND=glfw", script)
+        self.assertIn("passive|glfw)", script)
+        self.assertIn("TELEOP_VIEWER=$VIEWER_MODE", script)
+        self.assertIn("TELEOP_EGL_FAST=${TELEOP_EGL_FAST:-1}", script)
+        self.assertIn("EGL_W=${EGL_W:-640}", script)
+        self.assertIn("EGL_H=${EGL_H:-360}", script)
+        self.assertIn("TELEOP_FPS=${TELEOP_FPS:-30}", script)
+        self.assertIn("opencv-python==4.11.0.86", script)
+
     def test_top_tier_measurements(self):
         root = ET.parse(scene.TEMPLATE_PATH).getroot()
         geoms = {

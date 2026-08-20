@@ -124,6 +124,7 @@ VIEWER = os.environ.get("TELEOP_VIEWER", "passive").strip().lower()
 # would be too late. EGL_W/EGL_H size the offscreen framebuffer (GPU render resolution).
 EGL_W = int(os.environ.get("EGL_W", "1280"))     # offscreen GPU render width
 EGL_H = int(os.environ.get("EGL_H", "720"))      # offscreen GPU render height
+EGL_FAST = os.environ.get("TELEOP_EGL_FAST", "0").strip() == "1"
 TARGET_FPS = float(os.environ.get("TELEOP_FPS", "60"))
 CONTROL_SUBSTEPS_ENV = os.environ.get("TELEOP_SUBSTEPS")
 # =========================================================================================
@@ -1162,8 +1163,14 @@ def _egl_mouse_cb_factory(m, cam, scene_holder):
     return cb
 
 
+def _apply_egl_render_flags(scene):
+    if EGL_FAST:
+        scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0
+        scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
+
+
 def _print_egl_diag(renderer):
-    """GPU diagnostic for the EGL path: confirm we're rendering with EGL on device 2 and, if
+    """GPU diagnostic for the EGL path: confirm the selected EGL device and, if
     the EGL context's GL_RENDERER is queryable, print it (should be NVIDIA ... RTX 4090)."""
     dev = os.environ.get("MUJOCO_EGL_DEVICE_ID", "?")
     print("=" * 78, flush=True)
@@ -1180,6 +1187,8 @@ def _print_egl_diag(renderer):
                              if soft else "Hardware GPU EGL context — 3D is GPU-accelerated."), flush=True)
     except Exception as e:
         print(f"[GL] (EGL GL_RENDERER not queryable from this context: {e}) — render fps below is the proof.", flush=True)
+    if EGL_FAST:
+        print("[GL] Fast interactive mode: shadows/reflections disabled.", flush=True)
     print("=" * 78, flush=True)
 
 
@@ -1205,6 +1214,7 @@ def run_viewer_egl():
             handle_key(ch)
         control_step(substeps=CONTROL_SUBSTEPS)
         renderer.update_scene(d, camera=cam, scene_option=opt)
+        _apply_egl_render_flags(renderer.scene)
         scene_holder[0] = renderer.scene           # expose live scene to mouse cb for mjv_moveCamera
         rgb = renderer.render()                     # HxWx3 uint8 RGB, rendered on the GPU
         cv2.imshow(win, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
@@ -1235,6 +1245,7 @@ def egl_selftest(nframes=100, out_png=None):
     for _ in range(nframes):
         control_step(substeps=CONTROL_SUBSTEPS)
         renderer.update_scene(d, camera=cam, scene_option=opt)
+        _apply_egl_render_flags(renderer.scene)
         last = renderer.render()
     fps = nframes / (time.time() - t0)
     print(f"[EGL-selftest] rendered {nframes} frames @ {EGL_W}x{EGL_H}: {fps:.1f} render+physics fps", flush=True)

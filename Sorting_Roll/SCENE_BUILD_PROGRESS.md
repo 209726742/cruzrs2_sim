@@ -38,6 +38,7 @@
 - [x] 阶段 3：加入橡胶棒抓取/放置目标及任务判定。
 - [x] 阶段 4：执行测试与场景烟雾验证，整理运行说明。
 - [x] 阶段 5：按反馈旋转桌子、调整棒子初始位置并复核槽位适配性。
+- [x] 阶段 6：将交互查看器切换到 RTX 4090 EGL GPU，并验证兼容性与性能。
 
 ## 阶段日志
 
@@ -148,6 +149,24 @@
   - 实物标称棒直径与槽净宽均为 `0.025 m`，理论装配余量为 `0`。因此仅按标称值不能保证实物可靠插入；应实测“棒最大直径”和“槽最小净宽”。面向机器人自主放置，建议槽最小净宽比棒最大直径大 `0.002–0.004 m`，即 25 mm 棒对应约 27–29 mm 槽宽，或确认橡胶压缩量及定位误差后再冻结尺寸。
 - Sorting Roll 定向测试 `9/9 OK`；项目完整回归测试 `98/98 OK`；`git diff --check` 通过。
 
+### 2026-08-20：阶段 6A EGL GPU 入口与性能验证完成
+
+- `Sorting_Roll/run_scene.sh view` 已由默认 CPU `passive/glfw` 改为默认 `TELEOP_VIEWER=egl`；仍可通过 `TELEOP_VIEWER=passive` 手动回退。
+- 已在项目 `envs/mjx` 环境安装带 QT5 窗口支持的 `opencv-python 4.11.0.86`。安装过程中拒绝保留与 `openpi-client` 冲突的 NumPy 2.x，最终恢复并验证 `numpy 1.26.4`；`pip check` 报告无损坏依赖。
+- 启动脚本的缺依赖提示已固定为安装 `numpy<2` 和 `opencv-python==4.11.0.86`，避免新环境误装 OpenCV 5 并再次升级到不兼容的 NumPy 2.x。
+- 端到端 EGL 自检确认使用 GPU 0：`NVIDIA GeForce RTX 4090`、NVIDIA 驱动 `575.64.05`、OpenGL `4.6.0`，不是 Mesa `llvmpipe`。
+- Sorting Roll 交互模式默认关闭阴影和反射，但保留完整高模、纹理和全部物理语义；该快速标志只由本任务启动脚本启用，不改变其他场景和静态预览。
+- 网页远程桌面的默认交互参数设为 `640×360`、目标 `30 FPS`，均可由 `EGL_W`、`EGL_H`、`TELEOP_FPS` 覆盖。
+- 性能分离测试：物理控制约 `102.3 帧/s`（约 `1738.7` 物理步/s）；原高模阴影 GPU 绘制约 `2.0 FPS`，关闭阴影/反射后同分辨率纯绘制约 `16.6 FPS`；最终包含物理的默认入口实测约 `9.9 FPS`。
+- 当前剩余性能上限来自约 `519 万`个视觉三角面，而非 GPU 未启用。若需要稳定 30–60 FPS，下一步应为桌子、架子和棒子生成保留纹理的低模视觉副本；碰撞几何和任务逻辑无需改变。
+- Sorting Roll 定向测试已扩展为 `10/10 OK`，脚本 `bash -n`、`git diff --check` 均通过。下一步执行项目完整回归后关闭阶段 6。
+
+### 2026-08-20：阶段 6B 完整回归完成
+
+- 项目完整回归测试 `99/99 OK`，耗时约 `28.4 s`。
+- 现在从项目根目录直接执行 `bash Sorting_Roll/run_scene.sh view` 即默认走 EGL GPU 快速模式，不再需要手动设置 `TELEOP_VIEWER` 或 `MUJOCO_GL`。
+- 如需 CPU 兼容模式，可执行 `TELEOP_VIEWER=passive bash Sorting_Roll/run_scene.sh view`；如需提高画质，可通过例如 `EGL_W=960 EGL_H=540` 覆盖默认分辨率，但完整高模帧率会相应下降。
+
 ## 最终使用说明
 
 从仓库根目录执行：
@@ -159,17 +178,21 @@ Sorting_Roll/run_scene.sh check
 # 生成初始布局和目标槽近景预览
 Sorting_Roll/run_scene.sh preview
 
-# 打开原有 CRUZR 双臂/底盘遥操作查看器
+# 打开 CRUZR 双臂/底盘遥操作查看器（默认 RTX 4090 EGL GPU）
 Sorting_Roll/run_scene.sh view
+
+# 必要时手动回退到 CPU passive 查看器
+TELEOP_VIEWER=passive Sorting_Roll/run_scene.sh view
 ```
 
-若换机器，使用 `RL_MJX_PY=/path/to/mujoco/python` 指定带 MuJoCo 3.9 的解释器。`view` 模式默认使用 GLFW；无显示环境下使用 `check` 或 `preview`。
+若换机器，使用 `RL_MJX_PY=/path/to/mujoco/python` 指定带 MuJoCo 3.9 和上述 OpenCV 依赖的解释器。`view` 模式默认使用 EGL GPU；无显示环境下使用 `check` 或 `preview`。
 
 ## 当前结论
 
-- 五个实施阶段均已完成。
+- 六个实施阶段均已完成。
 - 场景尺寸、相对布局、目标槽结构和任务成功语义均有自动化检查。
 - 初始桌面状态和目标槽最终状态均已完成物理与视觉验证。
 - 桌子已按反馈旋转 `180°`，棒子已移到靠机器人侧的桌深三等分位置。
 - 仿真棒可以放入槽中；实物 25 mm 对 25 mm 为零间隙，需按上述建议复测或放宽槽宽后才能认为可靠。
+- 交互查看器现默认使用 RTX 4090 EGL GPU；当前约 `9.9 FPS` 的剩余瓶颈是 519 万三角面的视觉资产，继续提升到 30–60 FPS 需要生成低模视觉副本。
 - 正式动力学采集前仍需补充橡胶棒实测质量；当前明确使用 `0.25 kg` 临时值。
