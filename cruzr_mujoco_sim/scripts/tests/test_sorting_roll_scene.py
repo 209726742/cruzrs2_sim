@@ -77,6 +77,20 @@ class SortingRollSceneTest(unittest.TestCase):
             "sorting_roll_target",
         }.issubset(names))
 
+    def test_template_uses_separate_lowpoly_visual_meshes(self):
+        root = ET.parse(scene.TEMPLATE_PATH).getroot()
+        mesh_files = {
+            element.attrib["name"]: element.attrib["file"]
+            for element in root.iter("mesh")
+            if element.attrib.get("name", "").startswith("sorting_")
+        }
+        self.assertEqual(
+            set(mesh_files),
+            {"sorting_roll_mesh", "sorting_shelf_mesh", "sorting_table_mesh"},
+        )
+        for mesh_file in mesh_files.values():
+            self.assertTrue(mesh_file.endswith("_lowpoly.obj"), mesh_file)
+
     def test_view_command_defaults_to_egl_with_cpu_override(self):
         script = (scene.SORTING_ROOT / "run_scene.sh").read_text()
         self.assertIn("VIEWER_MODE=${TELEOP_VIEWER:-egl}", script)
@@ -85,9 +99,9 @@ class SortingRollSceneTest(unittest.TestCase):
         self.assertIn("passive|glfw)", script)
         self.assertIn("TELEOP_VIEWER=$VIEWER_MODE", script)
         self.assertIn("TELEOP_EGL_FAST=${TELEOP_EGL_FAST:-1}", script)
-        self.assertIn("EGL_W=${EGL_W:-640}", script)
-        self.assertIn("EGL_H=${EGL_H:-360}", script)
-        self.assertIn("TELEOP_FPS=${TELEOP_FPS:-30}", script)
+        self.assertIn("EGL_W=${EGL_W:-1280}", script)
+        self.assertIn("EGL_H=${EGL_H:-720}", script)
+        self.assertIn("TELEOP_FPS=${TELEOP_FPS:-60}", script)
         self.assertIn("opencv-python==4.11.0.86", script)
 
     def test_top_tier_measurements(self):

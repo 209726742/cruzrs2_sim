@@ -39,17 +39,17 @@ def required_assets():
         TEMPLATE_PATH,
         PACKAGE_ROOT / "assets" / "cruzr_pgc140.xml",
         SORTING_ROOT / "Assets" / "Roll" / "Meshy_AI__0819075833_texture_obj"
-        / "Meshy_AI__0819075833_texture.obj",
+        / "Meshy_AI__0819075833_texture_lowpoly.obj",
         SORTING_ROOT / "Assets" / "Roll" / "Meshy_AI__0819075833_texture_obj"
         / "Meshy_AI__0819075833_texture.png",
         SORTING_ROOT / "Assets" / "Shelf"
         / "Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture_obj"
-        / "Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture.obj",
+        / "Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture_lowpoly.obj",
         SORTING_ROOT / "Assets" / "Shelf"
         / "Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture_obj"
         / "Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture.png",
         SORTING_ROOT / "Assets" / "Table" / "Meshy_AI__0819090550_texture_obj"
-        / "Meshy_AI__0819090550_texture.obj",
+        / "Meshy_AI__0819090550_texture_lowpoly.obj",
         SORTING_ROOT / "Assets" / "Table" / "Meshy_AI__0819090550_texture_obj"
         / "Meshy_AI__0819090550_texture.png",
     )

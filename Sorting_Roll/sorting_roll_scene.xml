@@ -42,13 +42,13 @@
 
     <!-- Exact per-axis scales from the OBJ bounding boxes to the measured dimensions. -->
     <mesh name="sorting_roll_mesh"
-          file="../../../Sorting_Roll/Assets/Roll/Meshy_AI__0819075833_texture_obj/Meshy_AI__0819075833_texture.obj"
+          file="../../../Sorting_Roll/Assets/Roll/Meshy_AI__0819075833_texture_obj/Meshy_AI__0819075833_texture_lowpoly.obj"
           scale="0.25 0.257222817 0.257138155"/>
     <mesh name="sorting_shelf_mesh"
-          file="../../../Sorting_Roll/Assets/Shelf/Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture_obj/Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture.obj"
+          file="../../../Sorting_Roll/Assets/Shelf/Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture_obj/Meshy_AI_Corrected_Tiered_Shel_0819090318_image-to-3d-texture_lowpoly.obj"
           scale="0.755011841 0.735548701 0.591474487"/>
     <mesh name="sorting_table_mesh"
-          file="../../../Sorting_Roll/Assets/Table/Meshy_AI__0819090550_texture_obj/Meshy_AI__0819090550_texture.obj"
+          file="../../../Sorting_Roll/Assets/Table/Meshy_AI__0819090550_texture_obj/Meshy_AI__0819090550_texture_lowpoly.obj"
           scale="0.3 0.557554077 0.441333234"/>
   </asset>
 

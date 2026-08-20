@@ -48,9 +48,9 @@ case "$MODE" in
     TELEOP_SCENE_XML=$GENERATED_SCENE \
       TELEOP_VIEWER=$VIEWER_MODE \
       TELEOP_EGL_FAST=${TELEOP_EGL_FAST:-1} \
-      EGL_W=${EGL_W:-640} \
-      EGL_H=${EGL_H:-360} \
-      TELEOP_FPS=${TELEOP_FPS:-30} \
+      EGL_W=${EGL_W:-1280} \
+      EGL_H=${EGL_H:-720} \
+      TELEOP_FPS=${TELEOP_FPS:-60} \
       MUJOCO_GL=$GL_BACKEND \
       "$PYTHON_BIN" "$WORKSPACE_ROOT/cruzr_mujoco_sim/scripts/core/cruzr_teleop.py"
     ;;
