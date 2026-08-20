@@ -132,7 +132,8 @@ bash pi05_train.sh dry-run \
 - 共享仿真与任务契约：[`cruzr_mujoco_sim/scripts/core/`](cruzr_mujoco_sim/scripts/core/)
 - 当前测试：[`cruzr_mujoco_sim/scripts/tests/`](cruzr_mujoco_sim/scripts/tests/)
 - π0.5 训练入口：[`src/lerobot/scripts/lerobot_train.py`](src/lerobot/scripts/lerobot_train.py)
-- 当前训练状态和实验记录：[`当前进度与后续工作_20260817.md`](当前进度与后续工作_20260817.md)
+- 项目文档总索引：[`docs/README.md`](docs/README.md)
+- 当前训练状态和实验记录：[`docs/current/双物料线训练进度.md`](docs/current/双物料线训练进度.md)
 
 运行当前脚本测试：
 

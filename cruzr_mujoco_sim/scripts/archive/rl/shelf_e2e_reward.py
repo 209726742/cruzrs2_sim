@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reward function for the CRUZR S2 pillar pick-and-place online-RL run.
 
-Design doc: docs/RL_REWARD_DESIGN_pillar_e2e.md
+Design doc: docs/archive/立柱线Online_RL奖励设计.md
 
 Structure (deliberate): the reward LOGIC is a pure function of a plain `Sense` struct plus
 latch state -- no MuJoCo import needed -- so every anti-hacking property can be unit tested

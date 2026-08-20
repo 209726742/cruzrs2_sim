@@ -53,7 +53,6 @@ cruzr_mujoco_sim/
 │   └── pi05_cruzr_ecu_lora/       ECU 训练配置的 norm_stats 目录
 ├── scripts/                       37 个 .py/.sh，见 §4（立柱线）与 §5（ECU 线）
 ├── sim/cruzr_grip_control.py      夹爪开合换算（原本在 safe_vla_factory 根下，已随包附上）
-├── docs/RL_REWARD_DESIGN_pillar_e2e.md   奖励函数设计文档（含 v2 修订与验证结果）
 └── out/                           详见 out/README.md
     ├── teleop/shelf_e2e/          立柱线专家采集 episodes
     ├── teleop/demos/pillar_v{2..6}_refined/  立柱专家轨迹母本
@@ -205,7 +204,7 @@ SEED=1 EXPERT_OUT=out/teleop/shelf_e2e/demo_1 MUJOCO_GL=egl $RL_MJX_PY scripts/a
 ### 4.2 奖励函数（本项目的核心）
 
 `scripts/archive/rl/shelf_e2e_reward.py` —— 纯逻辑 `PillarReward` + `MujocoSensor` 历史适配器（不 import MuJoCo，
-所以可以单测）。设计见 `docs/RL_REWARD_DESIGN_pillar_e2e.md`。三条硬骨架：
+所以可以单测）。历史设计见 [`立柱线Online_RL奖励设计.md`](../docs/archive/立柱线Online_RL奖励设计.md)。三条硬骨架：
 
 1. **稠密项全部 potential-based**（Ng et al. 1999）：`Φ(s)=k(s)+φ_k(s)`，k 是 latch 的单调阶段号。
    `gamma_shape=1.0` 与 RL 的 `γ=0.995` **解耦** → 任何闭环轨迹 shaping 累积**恰好为 0**，

@@ -1,5 +1,7 @@
 # 在线 RL 奖励函数设计 — CRUZR S2 立柱端到端取放
 
+> 归档状态：旧单立柱 Online RL 设计，仅与 `scripts/archive/rl/` 中的历史实现配套，不用于当前双物料 π0.5 主线。
+>
 > 归档说明（2026-08-15）：这是一条旧单立柱 online-RL 设计线，实现在 `scripts/archive/rl/`，旧专家在 `scripts/archive/history/`。下文的 `scripts/<文件>` 是移动前的历史路径，不属于当前双物料 π0.5 数据采集入口。
 
 版本 v1（设计稿，待评审后实现）

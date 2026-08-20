@@ -6,12 +6,10 @@
 *.key
 *.whl
 CruzrS2/
-MD文档/
-cruzr_mujoco_sim/ECU_PIPELINE.md
-双物料线_pi05训练前评估与数据采集建议.md
-cruzr_mujoco_sim/ECU_SMOKE_REPORT.md
-cruzr_mujoco_sim/docs/CRUZR_S2_SDK_ALIGNMENT.md
-cruzr_mujoco_sim/docs/双物体两趟数据采集修改总结_2026-08-05.md
+# 本地内部工作文档：整理后统一放入 docs，但仍不进入公开仓库
+docs/archive/*
+!docs/archive/立柱线Online_RL奖励设计.md
+docs/current/CRUZR_S2真机SDK对齐说明.md
 
 # ===== 数据产物：5.3G / 40万文件，绝不入库 =====
 cruzr_mujoco_sim/out/
