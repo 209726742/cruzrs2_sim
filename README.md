@@ -133,7 +133,7 @@ bash pi05_train.sh dry-run \
 - 当前测试：[`cruzr_mujoco_sim/scripts/tests/`](cruzr_mujoco_sim/scripts/tests/)
 - π0.5 训练入口：[`src/lerobot/scripts/lerobot_train.py`](src/lerobot/scripts/lerobot_train.py)
 - 项目文档总索引：[`docs/README.md`](docs/README.md)
-- 当前训练状态和实验记录：[`docs/current/双物料线训练进度.md`](docs/current/双物料线训练进度.md)
+- 当前训练状态和实验记录：[`docs/current/双物料线训练进度_0820.md`](docs/current/双物料线训练进度_0820.md)
 
 运行当前脚本测试：
 

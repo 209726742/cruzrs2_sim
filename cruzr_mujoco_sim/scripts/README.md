@@ -10,7 +10,7 @@
 - `diagnostics/` 只做 NOREC 回归和几何探针，不发布训练数据。
 - `tests/` 是当前链的 21 个测试文件，现有测试总数为 100。
 - `archive/` 保存旧 ECU、RL/DAgger 和历史专家，不得与当前双物料数据混用；归档代码不承诺可原地运行。
-- 当前正式覆盖率门为至少 90%（24/26），v24 实测为 16/26；加上仅可见 1 张 GPU，仍禁止正式多卡采集。单条 episode 的任务、SDK、motion、terminal-hold 和源验收硬门没有放宽；柔性 synthetic 参数只用于隔离开发，当前状态见[双物料线训练进度](../../docs/current/双物料线训练进度.md)。
+- 当前正式覆盖率门为至少 90%（24/26），v24 实测为 16/26；加上仅可见 1 张 GPU，仍禁止正式多卡采集。单条 episode 的任务、SDK、motion、terminal-hold 和源验收硬门没有放宽；柔性 synthetic 参数只用于隔离开发，当前状态见[双物料线训练进度](../../docs/current/双物料线训练进度_0820.md)。
 
 目录结构：
 
@@ -142,7 +142,7 @@ scripts/
 [`stage_split.py`](archive/ecu/stage_split.py)、
 [`v5_batch.sh`](archive/ecu/v5_batch.sh)。
 
-历史说明见 [`ECU旧流程手册.md`](../../docs/archive/ECU旧流程手册.md)；其中旧命令不代表当前双物料入口。
+历史说明见 [`ECU旧流程手册_0820.md`](../../docs/archive/ECU旧流程手册_0820.md)；其中旧命令不代表当前双物料入口。
 
 ### 旧单立柱 RL / DAgger（13）
 

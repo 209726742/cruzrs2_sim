@@ -11,7 +11,7 @@ set -euo pipefail
 #   - 新增 sweep 动作，在多个 batch size 上实测显存与 step 时间
 #   - 默认硬件配置改为 2×H100；4×RTX 4090 的旧配置见 usage
 #   - resume 找不到完整 checkpoint 时不再静默从头开始
-#   改动理由详见 docs/current/Pi05训练参数说明.md
+#   改动理由详见 docs/current/Pi05训练参数说明_0820.md
 #
 # 动作：
 #   sweep         多个 batch size 各跑一次短训练，量显存和 step 时间（前台）

@@ -8,8 +8,8 @@
 CruzrS2/
 # 本地内部工作文档：整理后统一放入 docs，但仍不进入公开仓库
 docs/archive/*
-!docs/archive/立柱线Online_RL奖励设计.md
-docs/current/CRUZR_S2真机SDK对齐说明.md
+!docs/archive/立柱线Online_RL奖励设计_0820.md
+docs/current/CRUZR_S2真机SDK对齐说明_0820.md
 
 # ===== 数据产物：5.3G / 40万文件，绝不入库 =====
 cruzr_mujoco_sim/out/

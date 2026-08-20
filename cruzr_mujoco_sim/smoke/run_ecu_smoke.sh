@@ -226,7 +226,7 @@ rollout() {
     "out/rollout/ecu/hybrid_rollout/hybrid_top_head.mp4  —— rollout 全程视频（top_head 视角）
        out/logs/smoke/_smoke_rollout.log               —— M1~M4 各阶段结果
        作用: 直观检验策略行为；注意 smoke 数据量极小，动作不稳/失败是正常的" \
-    "想真能用: 参照 ../docs/archive/ECU旧流程手册.md 采 100+ 条多 bay 多 seed 数据，步数加大到 20k+"
+    "想真能用: 参照 ../docs/archive/ECU旧流程手册_0820.md 采 100+ 条多 bay 多 seed 数据，步数加大到 20k+"
 }
 
 clean() {

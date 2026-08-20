@@ -204,7 +204,7 @@ SEED=1 EXPERT_OUT=out/teleop/shelf_e2e/demo_1 MUJOCO_GL=egl $RL_MJX_PY scripts/a
 ### 4.2 奖励函数（本项目的核心）
 
 `scripts/archive/rl/shelf_e2e_reward.py` —— 纯逻辑 `PillarReward` + `MujocoSensor` 历史适配器（不 import MuJoCo，
-所以可以单测）。历史设计见 [`立柱线Online_RL奖励设计.md`](../docs/archive/立柱线Online_RL奖励设计.md)。三条硬骨架：
+所以可以单测）。历史设计见 [`立柱线Online_RL奖励设计_0820.md`](../docs/archive/立柱线Online_RL奖励设计_0820.md)。三条硬骨架：
 
 1. **稠密项全部 potential-based**（Ng et al. 1999）：`Φ(s)=k(s)+φ_k(s)`，k 是 latch 的单调阶段号。
    `gamma_shape=1.0` 与 RL 的 `γ=0.995` **解耦** → 任何闭环轨迹 shaping 累积**恰好为 0**，

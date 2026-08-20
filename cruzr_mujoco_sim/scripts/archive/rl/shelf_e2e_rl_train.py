@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PPO (Flow-SDE) online RL for pi0.5 on the CRUZR S2 pillar pick-and-place.
 
-Design: docs/archive/立柱线Online_RL奖励设计.md  (reward validated before this file was written)
+Design: docs/archive/立柱线Online_RL奖励设计_0820.md  (reward validated before this file was written)
 
 Layout
   * env workers      -- one subprocess per env (MuJoCo + cruzr_teleop are per-process singletons).
