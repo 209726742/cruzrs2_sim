@@ -26,8 +26,12 @@ from sorting_roll_expert import (
     FLAT_REGRASP_NEAR_END_M,
     FLAT_REGRASP_ORDER,
     FLAT_REGRASP_TARGET_ALONG_M,
-    FLAT_PICK_CLEARANCE_M,
-    FLAT_PICK_HIGH_Z_M,
+    FLAT_PICK_COORDINATION_GRID_STEPS,
+    FLAT_PICK_COORDINATION_CLEARANCE_CELLS,
+    FLAT_PICK_GOAL_IK_SEEDS,
+    FLAT_PICK_JOINT_WAYPOINTS,
+    FLAT_PICK_ROLL_CLEARANCE_MARGIN_M,
+    FLAT_PICK_COLLISION_STEP_RAD,
     FLAT_PICK_PREGRASP_CLEARANCE_Y_M,
     FLAT_PICK_TARGET_ALONG_M,
     FLAT_PICK_TIP_BIAS_Y_M,
@@ -37,49 +41,57 @@ from sorting_roll_expert import (
     INSERT_AXIS_CORRECTION_MIN_CLEARANCE_M,
     INSERT_AXIS_CORRECTION_MAX_STEP_M,
     RELEASE_APPROACH_Y_BIAS_M,
-    RELEASE_AXIS_COARSE_STEP_M,
-    RELEASE_AXIS_COARSE_STEPS,
-    RELEASE_AXIS_FINE_STEP_M,
+    RELEASE_BACKWARD_WITHDRAWAL_M,
     RELEASE_FRICTION_SETTLE_TICKS,
-    RELEASE_OPEN_RAISE_M,
     RELEASE_INSERT_STEP_M,
     RELEASE_PAD_SLIDING_FRICTION,
+    RELEASE_RECENTER_MAX_M,
+    RELEASE_RECENTER_MIN_INNER_FIT_M,
     RELEASE_PRE_TOUCH_X_M,
     RELEASE_ROLL_Z,
     RELEASE_TIP_REGRASP_X_M,
     RELEASE_TIP_REGRASP_STAGE_X_M,
     RELEASE_TOUCH_STEP_M,
     RELEASE_WRIST_LEVEL_DEG,
-    RIGHT_FLAT_PICK_IK_BRANCH_SEED_M,
     POLICY_CAMERAS,
     RECORDED_CAMERAS,
     REVIEW_ONLY_CAMERAS,
     TASK_VERSION,
     TARGET_CENTER,
     TARGET_AXIS,
+    SLOT_CAPTURE_HALF_WIDTH,
+    SLOT_PHYSICS_REVIEW_CAMERA,
+    SLOT_VISUAL_REVIEW_CAMERA,
     anchor_feedback_mount_position,
     anchored_mount_position,
     angle,
     bounded_vector,
+    camera_mount_report,
     cartesian_waypoints,
     cosine_steps,
     coupled_regrasp_progress,
+    coordination_clearance_mask,
+    monotonic_coordination_indices,
     cylinder_slot_fit_margin,
     flat_regrasp_anchors,
+    cylinder_capture_margin,
     flatten_target_rotation,
     grasp_target_rotation,
     insertion_axis_is_safe,
     insertion_axis_correction_has_clearance,
     mount_position_for_pad_target,
+    joint_polyline_at_progress,
     rotation_x,
     rotation_axis_angle,
     rotation_z,
-    release_axis_slide_distance,
     roll_half_extent_x,
     symmetric_level_correction,
     symmetric_axis_correction,
 )
-from sorting_roll_scene import TARGET_CENTER as SCENE_TARGET_CENTER
+from sorting_roll_scene import (
+    SCENE_PATH,
+    TARGET_CENTER as SCENE_TARGET_CENTER,
+)
 
 
 class SortingRollExpertTest(unittest.TestCase):
@@ -109,6 +121,12 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         self.assertLess(cylinder_slot_fit_margin(center_x, 0.015), 0.0)
 
+        self.assertAlmostEqual(
+            cylinder_capture_margin(center_x, 0.0), 0.018
+        )
+        self.assertGreater(
+            cylinder_capture_margin(0.778181, 0.001910), 0.0
+        )
     def test_insert_axis_monitor_accepts_dev050_drift_but_stays_bounded(self):
         self.assertTrue(insertion_axis_is_safe([0.00091, 0.999997, -0.0021]))
         self.assertFalse(
@@ -145,7 +163,7 @@ class SortingRollExpertTest(unittest.TestCase):
             ])
         )
 
-    def test_release_geometry_uses_validated_touch_and_withdrawal_steps(self):
+    def test_release_geometry_uses_continuous_backward_withdrawal(self):
         self.assertAlmostEqual(ARM_RETRACT_M, 0.082)
         self.assertAlmostEqual(RELEASE_ROLL_Z, 1.128)
         self.assertAlmostEqual(RELEASE_APPROACH_Y_BIAS_M, 0.0)
@@ -173,23 +191,12 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         self.assertAlmostEqual(RELEASE_INSERT_STEP_M, 0.008)
         self.assertLessEqual(RELEASE_INSERT_STEP_M, 0.010)
-        self.assertAlmostEqual(RELEASE_OPEN_RAISE_M, 0.004)
+        self.assertAlmostEqual(RELEASE_BACKWARD_WITHDRAWAL_M, 0.024)
+        self.assertAlmostEqual(SLOT_CAPTURE_HALF_WIDTH, 0.030)
         self.assertAlmostEqual(RELEASE_PAD_SLIDING_FRICTION, 1.0)
+        self.assertAlmostEqual(RELEASE_RECENTER_MAX_M, 0.006)
+        self.assertAlmostEqual(RELEASE_RECENTER_MIN_INNER_FIT_M, 0.001)
         self.assertEqual(RELEASE_FRICTION_SETTLE_TICKS, 12)
-        self.assertAlmostEqual(
-            release_axis_slide_distance(0),
-            RELEASE_AXIS_COARSE_STEP_M,
-        )
-        self.assertAlmostEqual(
-            release_axis_slide_distance(RELEASE_AXIS_COARSE_STEPS - 1),
-            RELEASE_AXIS_COARSE_STEP_M,
-        )
-        self.assertAlmostEqual(
-            release_axis_slide_distance(RELEASE_AXIS_COARSE_STEPS),
-            RELEASE_AXIS_FINE_STEP_M,
-        )
-        with self.assertRaises(ValueError):
-            release_axis_slide_distance(-1)
 
     def test_cosine_steps_respects_peak_step_bound(self):
         steps = cosine_steps(1.0, 0.01, minimum=2)
@@ -198,11 +205,35 @@ class SortingRollExpertTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             cosine_steps(1.0, 0.0)
 
-    def test_v4_target_is_sourced_from_scene_contract(self):
-        self.assertEqual(TASK_VERSION, "sorting_roll_v4")
+    def test_joint_polyline_uses_max_joint_distance(self):
+        waypoints = np.array([
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 2.0],
+        ])
+        np.testing.assert_allclose(
+            joint_polyline_at_progress(waypoints, 0.0),
+            [0.0, 0.0],
+        )
+        np.testing.assert_allclose(
+            joint_polyline_at_progress(waypoints, 1.0 / 3.0),
+            [1.0, 0.0],
+        )
+        np.testing.assert_allclose(
+            joint_polyline_at_progress(waypoints, 2.0 / 3.0),
+            [1.0, 1.0],
+        )
+        np.testing.assert_allclose(
+            joint_polyline_at_progress(waypoints, 1.0),
+            [1.0, 2.0],
+        )
+        with self.assertRaises(ValueError):
+            joint_polyline_at_progress(waypoints, -0.01)
+    def test_v7_target_is_sourced_from_scene_contract(self):
+        self.assertEqual(TASK_VERSION, "sorting_roll_v7")
         np.testing.assert_allclose(TARGET_CENTER, SCENE_TARGET_CENTER)
 
-    def test_v4_records_only_sdk_aligned_robot_cameras(self):
+    def test_v7_records_only_sdk_aligned_robot_cameras(self):
         self.assertEqual(
             POLICY_CAMERAS,
             ("stereo_left", "waist_front", "chassis_front"),
@@ -220,22 +251,40 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertNotIn("hand_left", RECORDED_CAMERAS)
         self.assertNotIn("hand_right", RECORDED_CAMERAS)
 
+    def test_v7_compiled_camera_mounts_match_sdk_extrinsics(self):
+        import mujoco
+
+        model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))
+        data = mujoco.MjData(model)
+        report = camera_mount_report(mujoco, model, data)
+        self.assertTrue(report["passed"], report)
+        self.assertFalse(report["intrinsics_verified"])
+        self.assertEqual(
+            set(report["cameras"]),
+            set(RECORDED_CAMERAS),
+        )
+        for camera in report["cameras"].values():
+            self.assertLessEqual(camera["position_error_mm"], 0.05)
+            self.assertLessEqual(camera["forward_error_deg"], 0.05)
+            self.assertLessEqual(camera["right_error_deg"], 0.05)
+
     def test_supported_pick_targets_flat_hands_without_loaded_rotation(self):
         self.assertAlmostEqual(FLAT_PICK_TARGET_ALONG_M, 0.160)
         self.assertAlmostEqual(FLAT_PICK_TIP_BIAS_Y_M, 0.034)
         self.assertGreater(FLAT_PICK_PREGRASP_CLEARANCE_Y_M, 0.05)
-        self.assertEqual(
-            FLAT_PICK_CLEARANCE_M,
-            {
-                "l": (0.330, 0.310, 0.100),
-                "r": (0.300, 0.210, 0.250),
-            },
+        self.assertAlmostEqual(
+            FLAT_PICK_ROLL_CLEARANCE_MARGIN_M,
+            0.008,
         )
-        self.assertEqual(
-            RIGHT_FLAT_PICK_IK_BRANCH_SEED_M,
-            (0.320, 0.240, 0.240),
-        )
-        self.assertAlmostEqual(FLAT_PICK_HIGH_Z_M, 0.060)
+        self.assertAlmostEqual(FLAT_PICK_COLLISION_STEP_RAD, 0.005)
+        self.assertEqual(FLAT_PICK_COORDINATION_GRID_STEPS, 120)
+        self.assertEqual(len(FLAT_PICK_JOINT_WAYPOINTS["l"]), 3)
+        self.assertEqual(len(FLAT_PICK_JOINT_WAYPOINTS["r"]), 5)
+        self.assertGreater(FLAT_PICK_GOAL_IK_SEEDS["l"][4], 0.0)
+        self.assertGreater(FLAT_PICK_GOAL_IK_SEEDS["r"][4], 0.0)
+        self.assertEqual(FLAT_PICK_COORDINATION_CLEARANCE_CELLS, 1)
+        self.assertEqual(SLOT_VISUAL_REVIEW_CAMERA, (0.72, -45.0, -50.0))
+        self.assertEqual(SLOT_PHYSICS_REVIEW_CAMERA, (0.72, 180.0, -60.0))
         target_pad = np.array([0.16, -0.93, 1.112])
         rotation = flatten_target_rotation(
             grasp_target_rotation(np.diag([-1.0, 1.0, -1.0]), 1.0),
@@ -254,6 +303,35 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         self.assertGreater(BASE_MAX_SPEED, 0.20)
         self.assertGreater(BASE_MAX_YAW_RATE, 0.40)
+
+    def test_dynamic_coordination_expands_obstacles_and_checks_edges(self):
+        validity = np.ones((5, 5), dtype=bool)
+        validity[2, 2] = False
+        clearance = coordination_clearance_mask(validity, 1)
+        self.assertFalse(np.any(clearance[1:4, 1:4]))
+        self.assertTrue(clearance[0, 0])
+        self.assertTrue(clearance[-1, -1])
+
+        checked_edges = []
+
+        def edge_is_safe(start, target):
+            checked_edges.append((start, target))
+            return (start, target) != ((1, 1), (2, 2))
+
+        path = monotonic_coordination_indices(
+            np.ones((4, 4), dtype=bool),
+            edge_is_safe=edge_is_safe,
+        )
+        self.assertEqual(path[0], (0, 0))
+        self.assertEqual(path[-1], (3, 3))
+        self.assertNotIn(((1, 1), (2, 2)), zip(path, path[1:]))
+        self.assertIn(((1, 1), (2, 2)), checked_edges)
+        for start, target in zip(path, path[1:]):
+            step = (
+                target[0] - start[0],
+                target[1] - start[1],
+            )
+            self.assertIn(step, ((1, 0), (0, 1), (1, 1)))
 
     def test_side_flat_rotation_makes_closing_axis_vertical(self):
         fingers_down = np.diag([-1.0, 1.0, -1.0])
@@ -460,8 +538,7 @@ class SortingRollExpertTest(unittest.TestCase):
             "navigate_to_table_observation",
             "approach_table_with_arms_down",
             "localize_roll_with_head_stereo",
-            "raise_and_flatten_after_stereo_localization",
-            "horizontal_pregrasp",
+            "coordinated_flat_pick_pregrasp_after_stereo_localization",
             "horizontal_approach_and_grasp",
             "lift_flat_from_pickup_support",
             "clear_table",
@@ -483,7 +560,7 @@ class SortingRollExpertTest(unittest.TestCase):
             "terminal_success_hold",
         )
         offsets = [
-            execute_source.index(f'self.phase("{phase}")')
+            execute_source.index(f'"{phase}"')
             for phase in phases
         ]
         self.assertEqual(offsets, sorted(offsets))
@@ -496,15 +573,46 @@ class SortingRollExpertTest(unittest.TestCase):
             "clearance_rotation = grasp_target_rotation",
             execute_source,
         )
+        self.assertNotIn("clearance_targets", execute_source)
         self.assertIn(
-            "[(clearance_position, rotations[hand])]",
+            "self.follow_coordinated_flat_pick_path(\n"
+            "            pregrasp_positions,",
+            execute_source,
+        )
+        self.assertNotIn(
+            "self.follow_empty_hands_stage(",
+            execute_source,
+        )
+        self.assertIn("tolerance=0.003", execute_source)
+        self.assertIn('"sdk_camera_mounts"', execute_source)
+        self.assertIn('self.require_held("shelf_translation")', execute_source)
+        self.assertIn(
+            '"shelf_corridor_reverse_plan"',
             execute_source,
         )
         self.assertIn(
-            '"right_flat_pick_ik_branch_seed_reachable"',
+            "self.reverse(corridor_reverse_m, max_speed=0.20)",
             execute_source,
         )
+        self.assertIn("shelf_base, 0.0, max_speed=0.22", execute_source)
+        self.assertEqual(execute_source.count("self.turn_in_place(0.0)"), 1)
         self.assertIn(
+            '"flat_pick_goal_ik_reachable"',
+            source,
+        )
+        self.assertIn(
+            '"collision_free_coordinated_flat_pick_path"',
+            source,
+        )
+        self.assertIn(
+            "FLAT_PICK_ROLL_CLEARANCE_MARGIN_M",
+            source,
+        )
+        self.assertIn(
+            '"hands_flat_before_pick"',
+            execute_source,
+        )
+        self.assertNotIn(
             '"hands_flat_after_localization_raise"',
             execute_source,
         )
@@ -512,6 +620,25 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertNotIn('self.phase("flatten_hands")', execute_source)
         self.assertNotIn('self.phase("regrasp_at_release_tips")', execute_source)
         self.assertIn("self.regrasp_at_release_tips()", execute_source)
+        self.assertIn(
+            "self.release_with_backward_withdrawal()",
+            execute_source,
+        )
+        self.assertNotIn("release_with_axis_withdrawal", execute_source)
+
+    def test_review_multiview_labels_sdk_camera_mounts(self):
+
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        encode_source = source[
+            source.index("    def encode_review_videos"):
+            source.index("    def finalize")
+        ]
+        self.assertIn("drawtext", encode_source)
+        self.assertIn("SDK_SENSOR_EXTRINSICS_ZYX", encode_source)
+        self.assertIn("slot_visual_review_video", encode_source)
+        self.assertIn("slot_physics_review_video", encode_source)
 
     def test_low_pad_friction_starts_only_after_gentle_touch(self):
         source = (
@@ -522,7 +649,7 @@ class SortingRollExpertTest(unittest.TestCase):
             source.index('self.phase("level_release_support_surfaces")')
         ]
         release = source[
-            source.index("def release_with_axis_withdrawal"):
+            source.index("def release_with_backward_withdrawal"):
             source.index("def track_success")
         ]
         self.assertNotIn("geom_friction", lower)
@@ -530,7 +657,21 @@ class SortingRollExpertTest(unittest.TestCase):
             release.index("geom_friction"),
             release.index('self.ct.grip_cmd["l"]'),
         )
+        self.assertIn("-RELEASE_BACKWARD_WITHDRAWAL_M", release)
+        self.assertNotIn("RELEASE_OPEN_RAISE_M", release)
+        self.assertNotIn("center_x_correction", release)
+        self.assertIn(
+            '"release_recentered_inside_slot"',
+            release,
+        )
+        self.assertLess(
+            release.index('"release_recentered_inside_slot"'),
+            release.index('self.ct.grip_cmd["l"]'),
+        )
+        self.assertNotIn("release_touch_force_relief", release)
 
 
+        self.assertNotIn("RELEASE_BACKWARD_MAX_STEPS", release)
+        self.assertIn('"release_capture_corridor"', release)
 if __name__ == "__main__":
     unittest.main()

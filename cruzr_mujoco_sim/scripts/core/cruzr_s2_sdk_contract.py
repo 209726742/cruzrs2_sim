@@ -102,6 +102,40 @@ SDK_DOCUMENTED_RGB_CAMERA_TOPICS = {
     "stereo_left": "/sensor/camera/stereo_left/image/raw",
     "stereo_right": "/sensor/camera/stereo_right/image/raw",
 }
+SDK_SENSOR_EXTRINSICS_ZYX = {
+    "waist_front": {
+        "parent_link": "waist_yaw_link",
+        "xyz_m": (0.07754007, 0.0, 0.02319591),
+        "rpy_deg": (0.0, 51.0, 0.0),
+    },
+    "chassis_front": {
+        "parent_link": "base_link",
+        "xyz_m": (0.30533127, 0.00128866, 0.155386),
+        "rpy_deg": (0.0, -10.0, 0.0),
+    },
+    "stereo_left": {
+        "parent_link": "head_pitch_link",
+        "xyz_m": (0.10675004, 0.03018686, 0.13200105),
+        "rpy_deg": (-90.0, 0.0, 0.0),
+    },
+    "stereo_right": {
+        "parent_link": "head_pitch_link",
+        "xyz_m": (0.10675004, -0.02981314, 0.13200105),
+        "rpy_deg": (-90.0, 0.0, 0.0),
+    },
+    "fisheye_left": {
+        "parent_link": "head_pitch_link",
+        "xyz_m": (0.02681314, 0.07925004, 0.10490105),
+        "rpy_deg": (-90.0, 90.0, 0.0),
+    },
+    "fisheye_right": {
+        "parent_link": "head_pitch_link",
+        "xyz_m": (0.02718686, -0.07925004, 0.10490105),
+        "rpy_deg": (-90.0, -90.0, 0.0),
+    },
+}
+SDK_SENSOR_ROTATION_ORDER = "ZYX"
+SDK_CAMERA_INTRINSICS_VERIFIED = False
 SDK_WRIST_CAMERAS = ()
 SDK_TASK_HEAD_POSE_RAD = {
     "head_yaw_joint": 0.0,
@@ -148,6 +182,16 @@ def contract_summary() -> dict:
         "documented_rgb_camera_topics": dict(
             SDK_DOCUMENTED_RGB_CAMERA_TOPICS
         ),
+        "sensor_extrinsics_zyx": {
+            name: {
+                "parent_link": values["parent_link"],
+                "xyz_m": list(values["xyz_m"]),
+                "rpy_deg": list(values["rpy_deg"]),
+            }
+            for name, values in SDK_SENSOR_EXTRINSICS_ZYX.items()
+        },
+        "sensor_rotation_order": SDK_SENSOR_ROTATION_ORDER,
+        "camera_intrinsics_verified": SDK_CAMERA_INTRINSICS_VERIFIED,
         "wrist_cameras": list(SDK_WRIST_CAMERAS),
         "task_head_pose_rad": dict(SDK_TASK_HEAD_POSE_RAD),
         "gripper": {

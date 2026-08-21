@@ -23,6 +23,9 @@ from cruzr_s2_sdk_contract import (  # noqa: E402
     ARM_RATED_SPEED_RAD_S,
     SDK_CAMERAS,
     SDK_DOCUMENTED_RGB_CAMERA_TOPICS,
+    SDK_CAMERA_INTRINSICS_VERIFIED,
+    SDK_SENSOR_EXTRINSICS_ZYX,
+    SDK_SENSOR_ROTATION_ORDER,
     SDK_WRIST_CAMERAS,
     SDK_COMMAND_DELTA_RAD_AT_DATASET_FPS,
     SDK_COMMAND_POSITION_MARGIN_RAD,
@@ -88,6 +91,25 @@ class CruzrS2SdkContractTest(unittest.TestCase):
         self.assertEqual(summary["wrist_cameras"], [])
         self.assertEqual(SDK_WRIST_CAMERAS, ())
         self.assertEqual(len(SDK_DOCUMENTED_RGB_CAMERA_TOPICS), 6)
+        self.assertEqual(SDK_SENSOR_ROTATION_ORDER, "ZYX")
+        self.assertFalse(SDK_CAMERA_INTRINSICS_VERIFIED)
+        self.assertFalse(summary["camera_intrinsics_verified"])
+        self.assertEqual(
+            set(SDK_SENSOR_EXTRINSICS_ZYX),
+            set(SDK_DOCUMENTED_RGB_CAMERA_TOPICS),
+        )
+        self.assertEqual(
+            SDK_SENSOR_EXTRINSICS_ZYX["waist_front"],
+            {
+                "parent_link": "waist_yaw_link",
+                "xyz_m": (0.07754007, 0.0, 0.02319591),
+                "rpy_deg": (0.0, 51.0, 0.0),
+            },
+        )
+        self.assertEqual(
+            summary["sensor_extrinsics_zyx"]["stereo_left"]["parent_link"],
+            "head_pitch_link",
+        )
         self.assertEqual(
             summary["task_head_pose_rad"], SDK_TASK_HEAD_POSE_RAD
         )

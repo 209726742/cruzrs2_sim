@@ -191,5 +191,35 @@ class SortingRollSceneTest(unittest.TestCase):
         self.assertAlmostEqual(front_pos[0] + 0.0225, scene.TARGET_CENTER[0])
         self.assertAlmostEqual(back_pos[0] - 0.0225, scene.TARGET_CENTER[0])
 
+    def test_visible_slot_is_exactly_aligned_with_collision_slot(self):
+        root = ET.parse(scene.TEMPLATE_PATH).getroot()
+        geoms = {
+            element.attrib["name"]: element.attrib
+            for element in root.iter("geom")
+            if "name" in element.attrib
+        }
+        for part in ("floor", "front_guard", "back_guard"):
+            collision = geoms[f"target_slot_{part}_col"]
+            visual = geoms[f"target_slot_{part}_visual"]
+            np.testing.assert_allclose(
+                np.fromstring(visual["pos"], sep=" "),
+                np.fromstring(collision["pos"], sep=" "),
+                atol=1e-12,
+            )
+            np.testing.assert_allclose(
+                np.fromstring(visual["size"], sep=" "),
+                np.fromstring(collision["size"], sep=" "),
+                atol=1e-12,
+            )
+            self.assertEqual(collision["group"], "3")
+            self.assertEqual(visual["group"], "1")
+            self.assertEqual(visual["contype"], "0")
+        self.assertAlmostEqual(
+            np.fromstring(
+                geoms["target_slot_floor_col"]["size"], sep=" "
+            )[1],
+            0.285,
+        )
+
 if __name__ == "__main__":
     unittest.main()

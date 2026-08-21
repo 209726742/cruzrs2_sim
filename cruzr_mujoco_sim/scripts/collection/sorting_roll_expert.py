@@ -19,9 +19,12 @@ CORE_DIR = PACKAGE_ROOT / "scripts" / "core"
 if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
 from cruzr_s2_sdk_contract import (
+    SDK_CAMERA_INTRINSICS_VERIFIED,
     SDK_CAMERAS,
     SDK_DOCUMENTED_RGB_CAMERA_TOPICS,
     SDK_DOC_REVISION,
+    SDK_SENSOR_EXTRINSICS_ZYX,
+    SDK_TASK_HEAD_POSE_RAD,
     SDK_WRIST_CAMERAS,
 )
 from sorting_roll_scene import (
@@ -30,7 +33,7 @@ from sorting_roll_scene import (
 )
 
 
-TASK_VERSION = "sorting_roll_v4"
+TASK_VERSION = "sorting_roll_v7"
 POLICY_CAMERAS = tuple(SDK_CAMERAS)
 REVIEW_ONLY_CAMERAS = ("stereo_right",)
 RECORDED_CAMERAS = (
@@ -47,6 +50,8 @@ TARGET_AXIS = np.array(SCENE_TARGET_AXIS, dtype=float, copy=True)
 ROLL_HALF_LENGTH = 0.25
 ROLL_RADIUS = 0.012
 SLOT_HALF_WIDTH = 0.015
+SLOT_CAPTURE_HALF_WIDTH = 0.030
+# The outer faces of both 15 mm guards span +/-30 mm about the slot center.
 TABLE_OBSERVATION_XY = np.array([0.0, -0.22])
 TABLE_GRASP_XY = np.array([0.0, -0.47])
 SHELF_STAGE_OFFSET_X = -0.0325
@@ -54,12 +59,38 @@ TABLE_CLEAR_REVERSE_M = 0.22
 FLAT_PICK_TARGET_ALONG_M = 0.160
 FLAT_PICK_TIP_BIAS_Y_M = 0.034
 FLAT_PICK_PREGRASP_CLEARANCE_Y_M = 0.080
-FLAT_PICK_CLEARANCE_M = {
-    "l": (0.330, 0.310, 0.100),
-    "r": (0.300, 0.210, 0.250),
+FLAT_PICK_JOINT_WAYPOINTS = {
+    "l": (
+        (-0.136501, -0.653467, -0.672957, -1.567190,
+         0.303419, 0.148975, -0.789504),
+        (0.007417, -0.403672, -0.459403, -2.158146,
+         0.458376, -0.021129, -0.537498),
+        (0.158711, -0.480863, -0.595613, -2.291150,
+         0.458796, 0.074554, -0.626465),
+    ),
+    "r": (
+        (-0.001863, -0.111983, 0.178962, -0.442671,
+         0.231289, 0.012784, 0.157823),
+        (-0.060050, -0.098085, 0.432070, -0.928434,
+         0.630283, -0.072288, 0.250209),
+        (0.182409, -0.125035, 0.953736, -1.910469,
+         1.718765, -0.309880, 0.337646),
+        (0.373690, -0.128822, 0.501785, -2.047680,
+         1.618803, -0.251106, -0.055149),
+        (0.134713, -0.056393, 0.773077, -2.073111,
+         1.590651, -0.126717, -0.037330),
+    ),
 }
-RIGHT_FLAT_PICK_IK_BRANCH_SEED_M = (0.320, 0.240, 0.240)
-FLAT_PICK_HIGH_Z_M = 0.060
+FLAT_PICK_GOAL_IK_SEEDS = {
+    "l": (0.135362, -0.554569, -0.799688, -2.264482,
+          0.884436, 0.052098, -1.010196),
+    "r": (0.207290, -0.095453, 1.256014, -2.366433,
+          1.988432, -0.326054, 0.521489),
+}
+FLAT_PICK_COORDINATION_GRID_STEPS = 120
+FLAT_PICK_COORDINATION_CLEARANCE_CELLS = 1
+FLAT_PICK_ROLL_CLEARANCE_MARGIN_M = 0.008
+FLAT_PICK_COLLISION_STEP_RAD = 0.005
 FLAT_PICK_LIFT_M = 0.085
 PRE_RELEASE_Y_TOLERANCE_M = 0.003
 PRE_RELEASE_ENDPOINT_MARGIN_M = 0.020
@@ -72,15 +103,13 @@ RELEASE_TOUCH_STEP_M = 0.0001
 RELEASE_TOUCH_MAX_STEPS = 40
 RELEASE_TOUCH_MIN_FORCE_N = 0.02
 RELEASE_TOUCH_MAX_FORCE_N = 5.0
+RELEASE_RECENTER_MAX_M = 0.006
+RELEASE_RECENTER_MIN_INNER_FIT_M = 0.001
 RELEASE_WRIST_LEVEL_DEG = 4.0
 RELEASE_TIP_REGRASP_X_M = {"l": -0.004, "r": -0.004}
 RELEASE_TIP_REGRASP_STAGE_X_M = 0.750
 RELEASE_INSERT_STEP_M = 0.008
-RELEASE_OPEN_RAISE_M = 0.004
-RELEASE_AXIS_COARSE_STEP_M = 0.004
-RELEASE_AXIS_FINE_STEP_M = 0.0001
-RELEASE_AXIS_COARSE_STEPS = 12
-RELEASE_AXIS_MAX_STEPS = 80
+RELEASE_BACKWARD_WITHDRAWAL_M = 0.024
 RELEASE_PAD_SLIDING_FRICTION = 1.0
 RELEASE_FRICTION_SETTLE_TICKS = 12
 GRASP_YAW_DEG = 14.0
@@ -132,6 +161,8 @@ ARM_SERVO_MIN_TICKS = 18
 ARM_SERVO_SETTLE_TICKS = 12
 GRASP_SETTLE_TICKS = 60
 RELEASE_OPEN_TICKS = 60
+SLOT_VISUAL_REVIEW_CAMERA = (0.72, -45.0, -50.0)
+SLOT_PHYSICS_REVIEW_CAMERA = (0.72, 180.0, -60.0)
 
 
 class ExpertFailure(RuntimeError):
@@ -149,6 +180,117 @@ def cosine_steps(distance, max_step, minimum=1):
         int(minimum), int(math.ceil(math.pi * float(distance) / (2.0 * max_step)))
     )
 
+
+def joint_polyline_at_progress(waypoints, progress):
+    waypoints = np.asarray(waypoints, dtype=float)
+    progress = float(progress)
+    if waypoints.ndim != 2 or len(waypoints) < 2:
+        raise ValueError("joint polyline requires at least two waypoints")
+    if not 0.0 <= progress <= 1.0:
+        raise ValueError("progress must be in [0, 1]")
+    segment_lengths = np.max(
+        np.abs(np.diff(waypoints, axis=0)),
+        axis=1,
+    )
+    if np.any(segment_lengths <= 1e-12):
+        raise ValueError("joint polyline contains a zero-length segment")
+    cumulative = np.concatenate(([0.0], np.cumsum(segment_lengths)))
+    if progress == 1.0:
+        return waypoints[-1].copy()
+    distance = progress * float(cumulative[-1])
+    segment = min(
+        int(np.searchsorted(cumulative, distance, side="right") - 1),
+        len(segment_lengths) - 1,
+    )
+    blend = (
+        (distance - cumulative[segment])
+        / segment_lengths[segment]
+    )
+    return (
+        waypoints[segment]
+        + blend * (waypoints[segment + 1] - waypoints[segment])
+    )
+
+
+def coordination_clearance_mask(validity, clearance_cells):
+    validity = np.asarray(validity, dtype=bool)
+    clearance_cells = int(clearance_cells)
+    if validity.ndim != 2 or min(validity.shape) < 2:
+        raise ValueError("coordination validity must be a 2-D grid")
+    if clearance_cells < 0:
+        raise ValueError("clearance_cells must be non-negative")
+    result = validity.copy()
+    if clearance_cells == 0:
+        return result
+    rows, columns = result.shape
+    for row, column in np.argwhere(~validity):
+        result[
+            max(0, row - clearance_cells):
+            min(rows, row + clearance_cells + 1),
+            max(0, column - clearance_cells):
+            min(columns, column + clearance_cells + 1),
+        ] = False
+    return result
+
+
+def monotonic_coordination_indices(validity, edge_is_safe=None):
+    validity = np.asarray(validity, dtype=bool)
+    if (
+        validity.ndim != 2
+        or validity.shape[0] != validity.shape[1]
+        or validity.shape[0] < 2
+    ):
+        raise ValueError("coordination validity must be a square grid")
+    final = validity.shape[0] - 1
+    if not validity[0, 0] or not validity[final, final]:
+        return ()
+
+    scores = np.full(validity.shape, np.inf)
+    scores[0, 0] = 0.0
+    parents = {}
+    for left in range(final + 1):
+        for right in range(final + 1):
+            if (left == 0 and right == 0) or not validity[left, right]:
+                continue
+            candidates = []
+            for delta_left, delta_right in ((1, 1), (1, 0), (0, 1)):
+                previous = (
+                    left - delta_left,
+                    right - delta_right,
+                )
+                if (
+                    previous[0] < 0
+                    or previous[1] < 0
+                    or not np.isfinite(scores[previous])
+                ):
+                    continue
+                score = (
+                    scores[previous]
+                    + abs(left - right)
+                    + (0.001 if delta_left != delta_right else 0.0)
+                )
+                direction_rank = 0 if delta_left == delta_right else 1
+                candidates.append((score, direction_rank, previous))
+            for score, _, previous in sorted(candidates):
+                if edge_is_safe is not None and not edge_is_safe(
+                    previous,
+                    (left, right),
+                ):
+                    continue
+                scores[left, right] = score
+                parents[(left, right)] = previous
+                break
+
+    if not np.isfinite(scores[final, final]):
+        return ()
+    path = []
+    cell = (final, final)
+    while True:
+        path.append(cell)
+        if cell == (0, 0):
+            break
+        cell = parents[cell]
+    return tuple(reversed(path))
 
 def bounded_vector(vector, max_norm):
     vector = np.asarray(vector, dtype=float)
@@ -260,6 +402,114 @@ def rotation_z(radians):
         [sine, cosine, 0.0],
         [0.0, 0.0, 1.0],
     ])
+
+
+def rotation_y(radians):
+    cosine = math.cos(float(radians))
+    sine = math.sin(float(radians))
+    return np.array([
+        [cosine, 0.0, sine],
+        [0.0, 1.0, 0.0],
+        [-sine, 0.0, cosine],
+    ])
+
+
+def vector_angle_degrees(first, second):
+    first = np.asarray(first, dtype=float)
+    second = np.asarray(second, dtype=float)
+    first /= float(np.linalg.norm(first))
+    second /= float(np.linalg.norm(second))
+    return math.degrees(math.acos(float(np.clip(
+        np.dot(first, second), -1.0, 1.0
+    ))))
+
+
+def camera_mount_report(mujoco, model, data):
+    mujoco.mj_forward(model, data)
+    chassis = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_BODY, "chassis"
+    )
+    robot_rotation = data.xmat[chassis].reshape(3, 3)
+    task_pitch = abs(float(SDK_TASK_HEAD_POSE_RAD["head_pitch_joint"]))
+    head_rotation = rotation_y(task_pitch)
+
+    expected = {}
+    for camera in RECORDED_CAMERAS:
+        raw = SDK_SENSOR_EXTRINSICS_ZYX[camera]
+        offset = np.asarray(raw["xyz_m"], dtype=float)
+        if camera.startswith("stereo_"):
+            offset = head_rotation @ offset
+            forward = head_rotation @ np.array([1.0, 0.0, 0.0])
+        else:
+            pitch = math.radians(float(raw["rpy_deg"][1]))
+            forward = np.array([
+                math.cos(pitch),
+                0.0,
+                -math.sin(pitch),
+            ])
+        expected[camera] = {
+            "parent": (
+                "chassis"
+                if raw["parent_link"] == "base_link"
+                else raw["parent_link"]
+            ),
+            "offset": offset,
+            "forward": forward,
+            "right": np.array([0.0, -1.0, 0.0]),
+        }
+
+    cameras = {}
+    for camera, target in expected.items():
+        camera_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_CAMERA, camera
+        )
+        parent_id = int(model.cam_bodyid[camera_id])
+        parent = mujoco.mj_id2name(
+            model, mujoco.mjtObj.mjOBJ_BODY, parent_id
+        )
+        rotation = data.cam_xmat[camera_id].reshape(3, 3)
+        offset = (
+            robot_rotation.T
+            @ (data.cam_xpos[camera_id] - data.xpos[parent_id])
+        )
+        forward = robot_rotation.T @ (-rotation[:, 2])
+        right = robot_rotation.T @ rotation[:, 0]
+        cameras[camera] = {
+            "parent": parent,
+            "expected_parent": target["parent"],
+            "offset_robot_m": np.round(offset, 8).tolist(),
+            "expected_offset_robot_m": np.round(
+                target["offset"], 8
+            ).tolist(),
+            "position_error_mm": round(
+                1000.0 * float(np.linalg.norm(offset - target["offset"])),
+                5,
+            ),
+            "forward_robot": np.round(forward, 8).tolist(),
+            "forward_error_deg": round(
+                vector_angle_degrees(forward, target["forward"]), 5
+            ),
+            "right_error_deg": round(
+                vector_angle_degrees(right, target["right"]), 5
+            ),
+            "fovy_deg": round(float(model.cam_fovy[camera_id]), 5),
+        }
+    passed = all(
+        item["parent"] == item["expected_parent"]
+        and item["position_error_mm"] <= 0.05
+        and item["forward_error_deg"] <= 0.05
+        and item["right_error_deg"] <= 0.05
+        for item in cameras.values()
+    )
+    return {
+        "passed": passed,
+        "source": f"CRUZR S2 SDK {SDK_DOC_REVISION} section 1.4.2",
+        "intrinsics_verified": SDK_CAMERA_INTRINSICS_VERIFIED,
+        "fovy_status": "simulation_assumption_pending_real_CameraInfo",
+        "cameras": cameras,
+    }
+
+
 
 
 def rotation_axis_angle(axis, radians):
@@ -401,6 +651,12 @@ def cylinder_slot_fit_margin(center_x, axis_x):
     return SLOT_HALF_WIDTH - half_x - center_error
 
 
+def cylinder_capture_margin(center_x, axis_x):
+    half_x = roll_half_extent_x(axis_x)
+    center_error = abs(float(center_x) - float(TARGET_CENTER[0]))
+    return SLOT_CAPTURE_HALF_WIDTH - half_x - center_error
+
+
 def insertion_axis_is_safe(roll_axis):
     roll_axis = np.asarray(roll_axis, dtype=float)
     return bool(
@@ -417,16 +673,6 @@ def insertion_axis_correction_has_clearance(
         min(float(roll_clearance), float(pad_clearance))
         >= INSERT_AXIS_CORRECTION_MIN_CLEARANCE_M
     )
-
-
-def release_axis_slide_distance(step_index):
-    step_index = int(step_index)
-    if step_index < 0:
-        raise ValueError("step_index must be non-negative")
-    if step_index < RELEASE_AXIS_COARSE_STEPS:
-        return RELEASE_AXIS_COARSE_STEP_M
-    return RELEASE_AXIS_FINE_STEP_M
-
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
@@ -520,10 +766,16 @@ class SortingRollExpert:
         self.out = Path(args.out).resolve()
         self.review_dir = self.out / "diagnostics" / "third_person"
         self.review_video = self.out / "sorting_roll_review.mp4"
-        self.slot_review_dir = (
+        self.slot_visual_review_dir = (
+            self.out / "diagnostics" / "slot_visual_closeup"
+        )
+        self.slot_visual_review_video = (
+            self.out / "sorting_roll_slot_visual_closeup.mp4"
+        )
+        self.slot_physics_review_dir = (
             self.out / "diagnostics" / "slot_physics_closeup"
         )
-        self.slot_review_video = (
+        self.slot_physics_review_video = (
             self.out / "sorting_roll_slot_physics_closeup.mp4"
         )
         self.robot_camera_videos = {
@@ -537,6 +789,14 @@ class SortingRollExpert:
         self.roll_body = ct.bid("sorting_roll")
         self.roll_geom = ct.gid("sorting_roll_col")
         self.shelf_visual_geom = ct.gid("sorting_shelf_visual")
+        self.slot_visual_geom_ids = {
+            ct.gid(name)
+            for name in (
+                "target_slot_floor_visual",
+                "target_slot_front_guard_visual",
+                "target_slot_back_guard_visual",
+            )
+        }
         self.roll_joint = ct.jid("sorting_roll_free")
         self.roll_qpos_adr = int(self.model.jnt_qposadr[self.roll_joint])
         self.roll_dof_adr = int(self.model.jnt_dofadr[self.roll_joint])
@@ -597,7 +857,8 @@ class SortingRollExpert:
 
         self.out.mkdir(parents=True)
         self.review_dir.mkdir(parents=True)
-        self.slot_review_dir.mkdir(parents=True)
+        self.slot_visual_review_dir.mkdir(parents=True)
+        self.slot_physics_review_dir.mkdir(parents=True)
         ct.REC_WH = (args.width, args.height)
         self.recorder = ct.EpisodeRecorder(str(self.out))
         ct.REC.update({
@@ -608,7 +869,7 @@ class SortingRollExpert:
             "metadata": {
                 "task_version": TASK_VERSION,
                 "seed": args.seed,
-                "collection_profile": "sorting_roll_canary_v4_sdk_camera_review",
+                "collection_profile": "sorting_roll_canary_v7_coordinated_pick",
                 "training_eligible": False,
                 "success_source": "sorting_roll_task.SortingRollSuccessTracker",
                 "policy_cameras": list(POLICY_CAMERAS),
@@ -623,9 +884,21 @@ class SortingRollExpert:
                     UNMODELED_SDK_RGB_CAMERAS
                 ),
                 "synthetic_wrist_cameras_recorded": False,
-                "review_camera": "free_camera_azimuth_135_not_policy_input",
+                "camera_extrinsics_source": (
+                    f"CRUZR S2 SDK {SDK_DOC_REVISION} section 1.4.2"
+                ),
+                "camera_intrinsics_verified": SDK_CAMERA_INTRINSICS_VERIFIED,
+                "camera_fovy_status": (
+                    "simulation_assumption_pending_real_CameraInfo"
+                ),
+                "review_camera": "free_camera_azimuth_45_not_policy_input",
+                "slot_visual_review_camera": (
+                    "free_camera_azimuth_-45_elevation_-50_"
+                    "visible_geometry_not_policy_input"
+                ),
                 "slot_physics_review_camera": (
-                    "free_camera_azimuth_90_collision_geometry_not_policy_input"
+                    "free_camera_azimuth_180_elevation_-60_"
+                    "collision_geometry_not_policy_input"
                 ),
                 "release_pad_sliding_friction": (
                     RELEASE_PAD_SLIDING_FRICTION
@@ -635,19 +908,33 @@ class SortingRollExpert:
 
         self.review_camera = mujoco.MjvCamera()
         self.review_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-        self.review_camera.lookat[:] = [0.40, -0.45, 0.76]
-        self.review_camera.distance = 2.65
-        self.review_camera.azimuth = 135.0
-        self.review_camera.elevation = -20.0
+        self.review_camera.lookat[:] = [0.40, -0.45, 0.82]
+        self.review_camera.distance = 2.55
+        self.review_camera.azimuth = 45.0
+        self.review_camera.elevation = -22.0
 
-        self.slot_review_camera = mujoco.MjvCamera()
-        self.slot_review_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-        self.slot_review_camera.lookat[:] = [0.7825, 0.0, 1.015]
-        self.slot_review_camera.distance = 0.90
-        self.slot_review_camera.azimuth = 90.0
-        self.slot_review_camera.elevation = -20.0
-        self.slot_review_option = mujoco.MjvOption()
-        self.slot_review_option.geomgroup[3] = 1
+
+        self.visual_review_option = mujoco.MjvOption()
+        self.visual_review_option.geomgroup[3] = 0
+
+        self.slot_visual_review_camera = mujoco.MjvCamera()
+        self.slot_visual_review_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+        self.slot_visual_review_camera.lookat[:] = [0.7825, 0.0, 1.015]
+        (
+            self.slot_visual_review_camera.distance,
+            self.slot_visual_review_camera.azimuth,
+            self.slot_visual_review_camera.elevation,
+        ) = SLOT_VISUAL_REVIEW_CAMERA
+        self.slot_physics_review_camera = mujoco.MjvCamera()
+        self.slot_physics_review_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+        self.slot_physics_review_camera.lookat[:] = [0.7825, 0.0, 1.015]
+        (
+            self.slot_physics_review_camera.distance,
+            self.slot_physics_review_camera.azimuth,
+            self.slot_physics_review_camera.elevation,
+        ) = SLOT_PHYSICS_REVIEW_CAMERA
+        self.slot_physics_review_option = mujoco.MjvOption()
+        self.slot_physics_review_option.geomgroup[3] = 1
 
     def phase(self, name):
         self.ct.REC["phase"] = name
@@ -674,6 +961,12 @@ class SortingRollExpert:
             monitor["maximum_roll_x"] = max(
                 monitor["maximum_roll_x"], roll_x
             )
+            capture_margin = cylinder_capture_margin(
+                roll_x, float(self.roll_axis()[0])
+            )
+            monitor["minimum_capture_margin"] = min(
+                monitor["minimum_capture_margin"], capture_margin
+            )
         if self.recorder.n != previous:
             self.recorded_roll_qpos.append(
                 self.data.qpos[self.roll_qpos_adr:self.roll_qpos_adr + 7].copy()
@@ -688,17 +981,31 @@ class SortingRollExpert:
                 self.data,
                 self.review_camera,
                 self.review_dir / f"frame_{self.recorder.n - 1:06d}.jpg",
+                scene_option=self.visual_review_option,
             )
             render_third_person(
                 self.recorder,
                 self.mujoco,
                 self.model,
                 self.data,
-                self.slot_review_camera,
-                self.slot_review_dir
+                self.slot_visual_review_camera,
+                self.slot_visual_review_dir
                 / f"frame_{self.recorder.n - 1:06d}.jpg",
-                scene_option=self.slot_review_option,
-                hidden_geom_ids=(self.shelf_visual_geom,),
+                scene_option=self.visual_review_option,
+            )
+            render_third_person(
+                self.recorder,
+                self.mujoco,
+                self.model,
+                self.data,
+                self.slot_physics_review_camera,
+                self.slot_physics_review_dir
+                / f"frame_{self.recorder.n - 1:06d}.jpg",
+                scene_option=self.slot_physics_review_option,
+                hidden_geom_ids=(
+                    self.shelf_visual_geom,
+                    *sorted(self.slot_visual_geom_ids),
+                ),
             )
         return dt
 
@@ -1010,16 +1317,20 @@ class SortingRollExpert:
         label,
         tolerance=ARM_TRACK_TOL_RAD,
         collision_free_hand=None,
+        collision_free_hands=(),
     ):
         stable_ticks = 0
         error = float("inf")
         for tick in range(1, ARM_TRACK_MAX_TICKS + 1):
+            hands = list(collision_free_hands)
             if collision_free_hand is not None:
-                contacts = self.moving_arm_contacts(collision_free_hand)
+                hands.append(collision_free_hand)
+            for collision_hand in hands:
+                contacts = self.moving_arm_contacts(collision_hand)
                 if contacts:
                     raise ExpertFailure(
                         f"moving arm collision phase={label} "
-                        f"hand={collision_free_hand} contacts={contacts}"
+                        f"hand={collision_hand} contacts={contacts}"
                     )
             error = max(
                 abs(float(self.data.qpos[address]) - float(target))
@@ -1230,6 +1541,279 @@ class SortingRollExpert:
             f"max_residual_mm={1000.0 * max_position_residual:.2f} "
             f"max_rotation_deg={max_rotation_residual:.3f} "
             f"contacts={contacts}",
+        )
+
+    def bimanual_contacts(self):
+        return {
+            hand: contacts
+            for hand in ("l", "r")
+            if (contacts := self.moving_arm_contacts(hand))
+        }
+
+    def follow_coordinated_flat_pick_path(
+        self,
+        pregrasp_positions,
+        rotations,
+    ):
+        goal_targets = {}
+        residuals = {}
+        rotation_residuals = {}
+        for hand in ("l", "r"):
+            target, residual, rotation_residual = (
+                self.solve_one_mount_target(
+                    hand,
+                    np.asarray(
+                        FLAT_PICK_GOAL_IK_SEEDS[hand],
+                        dtype=float,
+                    ),
+                    pregrasp_positions[hand],
+                    rotations[hand],
+                )
+            )
+            goal_targets[hand] = target
+            residuals[hand] = residual
+            rotation_residuals[hand] = rotation_residual
+        self.gate(
+            "flat_pick_goal_ik_reachable",
+            max(residuals.values()) <= 0.012
+            and max(rotation_residuals.values())
+            <= IK_ROTATION_TOLERANCE_DEG,
+            "residual_mm="
+            + json.dumps({
+                hand: round(1000.0 * residuals[hand], 3)
+                for hand in ("l", "r")
+            })
+            + " rotation_deg="
+            + json.dumps({
+                hand: round(rotation_residuals[hand], 4)
+                for hand in ("l", "r")
+            }),
+        )
+
+        start_joints = self.arm_joint_positions()
+        joint_paths = {
+            hand: np.asarray([
+                start_joints[hand],
+                *FLAT_PICK_JOINT_WAYPOINTS[hand],
+                goal_targets[hand],
+            ], dtype=float)
+            for hand in ("l", "r")
+        }
+        grid_steps = FLAT_PICK_COORDINATION_GRID_STEPS
+        grid_configurations = {
+            hand: np.asarray([
+                joint_polyline_at_progress(
+                    joint_paths[hand],
+                    index / grid_steps,
+                )
+                for index in range(grid_steps + 1)
+            ])
+            for hand in ("l", "r")
+        }
+
+        def configuration_for_cell(cell):
+            return np.concatenate([
+                grid_configurations["l"][cell[0]],
+                grid_configurations["r"][cell[1]],
+            ])
+
+        def set_arm_configuration(configuration):
+            for arm, offset in (
+                (self.ct.L, 0),
+                (self.ct.R, 7),
+            ):
+                for address, value in zip(
+                    arm.qadr,
+                    configuration[offset:offset + 7],
+                ):
+                    self.data.qpos[address] = value
+            self.mujoco.mj_forward(self.model, self.data)
+
+        saved_qpos = self.data.qpos.copy()
+        saved_qvel = self.data.qvel.copy()
+        original_roll_radius = float(
+            self.model.geom_size[self.roll_geom, 0]
+        )
+        cells = ()
+        collision = None
+        edge_checks = 0
+        edge_samples = 0
+        valid_grid_nodes = 0
+        planning_grid_nodes = 0
+        execution_steps = 0
+        execution = []
+        max_command_delta = 0.0
+        validated_samples = 0
+
+        def edge_is_safe(start_cell, target_cell):
+            nonlocal edge_checks, edge_samples
+            start = configuration_for_cell(start_cell)
+            target = configuration_for_cell(target_cell)
+            distance = float(np.max(np.abs(target - start)))
+            samples = max(
+                2,
+                int(math.ceil(
+                    distance / FLAT_PICK_COLLISION_STEP_RAD
+                )) + 1,
+            )
+            edge_checks += 1
+            for blend in np.linspace(0.0, 1.0, samples)[1:-1]:
+                set_arm_configuration(
+                    start + blend * (target - start)
+                )
+                edge_samples += 1
+                if self.bimanual_contacts():
+                    return False
+            return True
+
+        try:
+            self.model.geom_size[self.roll_geom, 0] = (
+                original_roll_radius
+                + FLAT_PICK_ROLL_CLEARANCE_MARGIN_M
+            )
+            validity = np.zeros(
+                (grid_steps + 1, grid_steps + 1),
+                dtype=bool,
+            )
+            for left in range(grid_steps + 1):
+                for right in range(grid_steps + 1):
+                    set_arm_configuration(
+                        configuration_for_cell((left, right))
+                    )
+                    validity[left, right] = not self.bimanual_contacts()
+            valid_grid_nodes = int(np.count_nonzero(validity))
+            planning_validity = coordination_clearance_mask(
+                validity,
+                FLAT_PICK_COORDINATION_CLEARANCE_CELLS,
+            )
+            planning_validity[0, 0] = validity[0, 0]
+            planning_validity[-1, -1] = validity[-1, -1]
+            planning_grid_nodes = int(
+                np.count_nonzero(planning_validity)
+            )
+            cells = monotonic_coordination_indices(
+                planning_validity,
+                edge_is_safe=edge_is_safe,
+            )
+            if not cells:
+                collision = {"reason": "no_monotonic_coordination_path"}
+            else:
+                coordinated = np.asarray([
+                    configuration_for_cell(cell)
+                    for cell in cells
+                ])
+                segment_lengths = np.max(
+                    np.abs(np.diff(coordinated, axis=0)),
+                    axis=1,
+                )
+                total_distance = float(np.sum(segment_lengths))
+                execution_steps = cosine_steps(
+                    total_distance,
+                    EMPTY_HAND_SERVO_MAX_STEP_RAD,
+                    minimum=ARM_SERVO_MIN_TICKS,
+                )
+                execution = [
+                    joint_polyline_at_progress(
+                        coordinated,
+                        0.5 - 0.5 * math.cos(
+                            math.pi * (index + 1)
+                            / execution_steps
+                        ),
+                    )
+                    for index in range(execution_steps)
+                ]
+                validation = [coordinated[0], *execution]
+                max_command_delta = max(
+                    float(np.max(np.abs(target - start)))
+                    for start, target in zip(
+                        validation,
+                        validation[1:],
+                    )
+                )
+
+                for segment_index, (start, target) in enumerate(
+                    zip(validation, validation[1:])
+                ):
+                    distance = float(np.max(np.abs(target - start)))
+                    samples = max(
+                        2,
+                        int(math.ceil(
+                            distance / FLAT_PICK_COLLISION_STEP_RAD
+                        )) + 1,
+                    )
+                    for sample_index, blend in enumerate(
+                        np.linspace(0.0, 1.0, samples)
+                    ):
+                        if segment_index and sample_index == 0:
+                            continue
+                        set_arm_configuration(
+                            start + blend * (target - start)
+                        )
+                        validated_samples += 1
+                        contacts = self.bimanual_contacts()
+                        if contacts:
+                            collision = {
+                                "segment": segment_index + 1,
+                                "sample": sample_index + 1,
+                                "contacts": contacts,
+                            }
+                            break
+                    if collision:
+                        break
+        finally:
+            self.model.geom_size[self.roll_geom, 0] = (
+                original_roll_radius
+            )
+            self.data.qpos[:] = saved_qpos
+            self.data.qvel[:] = saved_qvel
+            self.mujoco.mj_forward(self.model, self.data)
+
+        max_progress_gap = (
+            max(abs(left - right) for left, right in cells)
+            / grid_steps
+            if cells
+            else math.inf
+        )
+        self.gate(
+            "collision_free_coordinated_flat_pick_path",
+            bool(cells) and collision is None,
+            f"grid_nodes={(grid_steps + 1) ** 2} "
+            f"valid_grid_nodes={valid_grid_nodes} "
+            f"planning_grid_nodes={planning_grid_nodes} "
+            f"path_nodes={len(cells)} "
+            f"max_progress_gap={max_progress_gap:.4f} "
+            f"edge_checks={edge_checks} "
+            f"edge_samples={edge_samples} "
+            f"execution_steps={execution_steps} "
+            f"validated_samples={validated_samples} "
+            f"roll_clearance_margin_mm="
+            f"{1000.0 * FLAT_PICK_ROLL_CLEARANCE_MARGIN_M:.1f} "
+            f"collision={collision}",
+        )
+
+        for target in execution:
+            self.ct.qtgt["l"][:] = target[:7]
+            self.ct.qtgt["r"][:] = target[7:]
+            self.ct.base_vel[:] = 0.0
+            self.frames(1)
+            contacts = self.bimanual_contacts()
+            if contacts:
+                self.gate(
+                    "collision_free_coordinated_flat_pick_execution",
+                    False,
+                    f"contacts={contacts}",
+                )
+        self.wait_arm_tracking(
+            "coordinated_flat_pick_pregrasp",
+            collision_free_hands=("l", "r"),
+        )
+        self.gate(
+            "collision_free_coordinated_flat_pick_execution",
+            not self.bimanual_contacts(),
+            f"execution_steps={execution_steps} "
+            f"max_command_delta_rad={max_command_delta:.6f} "
+            f"max_command_speed_rad_s="
+            f"{CONTROL_FPS * max_command_delta:.4f}",
         )
 
     def move_mounts_delta(self, delta):
@@ -2126,12 +2710,13 @@ class SortingRollExpert:
         )
         return roll_contact
 
-    def release_with_axis_withdrawal(self):
+    def release_with_backward_withdrawal(self):
         self.release_contact_monitor = {
             "maximum_pad_force": 0.0,
             "maximum_pad_pairs": [],
             "minimum_roll_x": float("inf"),
             "maximum_roll_x": -float("inf"),
+            "minimum_capture_margin": float("inf"),
         }
         for geom in self.pad_ids:
             self.model.geom_friction[geom, 0] = (
@@ -2157,12 +2742,60 @@ class SortingRollExpert:
             {self.roll_geom}, self.release_touch_geom_ids
         )
         self.gate(
-            "gentle_touch_preserved_for_release",
+            "gentle_touch_preserved_before_release_recenter",
             RELEASE_TOUCH_MIN_FORCE_N
             <= roll_contact["force_n"]
             <= RELEASE_TOUCH_MAX_FORCE_N,
             f"force_n={roll_contact['force_n']:.4f} "
             f"pairs={roll_contact['pairs']}",
+        )
+        release_recenter_delta_x = (
+            float(TARGET_CENTER[0])
+            - float(self.roll_position()[0])
+        )
+        self.gate(
+            "release_recenter_plan",
+            abs(release_recenter_delta_x) <= RELEASE_RECENTER_MAX_M,
+            f"delta_mm={1000.0 * release_recenter_delta_x:.3f} "
+            f"target_x={float(TARGET_CENTER[0]):.6f}",
+        )
+        self.move_mount_commands_delta([
+            release_recenter_delta_x,
+            0.0,
+            0.0,
+        ])
+        self.require_held("release_recentered")
+
+        position = self.roll_position()
+        axis = self.roll_axis()
+        inner_fit_margin = self.slot_fit_margin()
+        capture_margin = cylinder_capture_margin(
+            float(position[0]),
+            float(axis[0]),
+        )
+        roll_contact = self.contact_evidence(
+            {self.roll_geom}, self.release_touch_geom_ids
+        )
+        pad_contact = self.contact_evidence(
+            self.pad_ids, self.shelf_geom_ids
+        )
+        self.gate(
+            "release_recentered_inside_slot",
+            abs(float(position[0]) - float(TARGET_CENTER[0]))
+            <= 0.001
+            and inner_fit_margin
+            >= RELEASE_RECENTER_MIN_INNER_FIT_M
+            and capture_margin >= 0.001
+            and insertion_axis_is_safe(axis)
+            and roll_contact["force_n"] <= 0.05
+            and pad_contact["force_n"] <= 0.2,
+            f"position={np.round(position, 6).tolist()} "
+            f"axis={np.round(axis, 6).tolist()} "
+            f"inner_fit_margin_mm={1000.0 * inner_fit_margin:.3f} "
+            f"capture_margin_mm={1000.0 * capture_margin:.3f} "
+            f"roll_touch_force_n={roll_contact['force_n']:.4f} "
+            f"pad_force_n={pad_contact['force_n']:.4f} "
+            f"pad_pairs={pad_contact['pairs']}",
         )
         self.ct.GRIP_RATE = RELEASE_GRIP_RATE
         self.ct.grip_cmd["l"] = self.ct.GRIP_OPEN
@@ -2170,78 +2803,43 @@ class SortingRollExpert:
         self.frames(RELEASE_OPEN_TICKS)
 
         self.move_mount_commands_delta([
+            -RELEASE_BACKWARD_WITHDRAWAL_M,
             0.0,
             0.0,
-            RELEASE_OPEN_RAISE_M,
         ])
-
-        steps_taken = 0
-        for step_index in range(RELEASE_AXIS_MAX_STEPS):
-            step_m = release_axis_slide_distance(step_index)
-            center_x_correction = float(np.clip(
-                TARGET_CENTER[0] - self.roll_position()[0],
-                -0.015,
-                0.015,
-            ))
-            self.move_mount_command_deltas({
-                "l": np.array([
-                    center_x_correction,
-                    step_m,
-                    0.0,
-                ]),
-                "r": np.array([
-                    center_x_correction,
-                    -step_m,
-                    0.0,
-                ]),
-            })
-            steps_taken += 1
-            left = self.grip_evidence("L")
-            right = self.grip_evidence("R")
-            if left["pads"] and right["pads"]:
-                for _ in range(3):
-                    axis = self.roll_axis()
-                    if (
-                        abs(float(axis[0])) <= 0.0008
-                        and abs(float(axis[2])) <= 0.02
-                    ):
-                        break
-                    left_delta = symmetric_axis_correction(
-                        axis,
-                        self.ct.L.padmid(),
-                        self.ct.R.padmid(),
-                        TARGET_AXIS,
-                        0.003,
-                    )
-                    self.move_mount_command_deltas({
-                        "l": left_delta,
-                        "r": -left_delta,
-                    })
-                left = self.grip_evidence("L")
-                right = self.grip_evidence("R")
-            print(
-                f"[release_axis_withdrawal] step={steps_taken} "
-                f"roll={np.round(self.roll_position(), 6).tolist()} "
-                f"left={left['force_n']:.3f}N/{left['pads']} "
-                f"right={right['force_n']:.3f}N/{right['pads']}",
-                flush=True,
-            )
-            if not left["pads"] and not right["pads"]:
-                break
+        left = self.grip_evidence("L")
+        right = self.grip_evidence("R")
+        inner_fit_margin = self.slot_fit_margin()
+        print(
+            "[release_continuous_backward_withdrawal] "
+            f"distance_mm={1000.0 * RELEASE_BACKWARD_WITHDRAWAL_M:.1f} "
+            f"roll={np.round(self.roll_position(), 6).tolist()} "
+            f"inner_fit_margin_mm={1000.0 * inner_fit_margin:.3f} "
+            f"left={left['force_n']:.3f}N/{left['pads']} "
+            f"right={right['force_n']:.3f}N/{right['pads']}",
+            flush=True,
+        )
 
         left = self.grip_evidence("L")
         right = self.grip_evidence("R")
         monitor = self.release_contact_monitor
         self.release_contact_monitor = None
         self.gate(
-            "released_by_axis_withdrawal",
+            "released_by_continuous_backward_withdrawal",
             not left["pads"]
             and not right["pads"]
             and left["force_n"] <= 0.05
             and right["force_n"] <= 0.05,
-            f"steps={steps_taken} "
+            f"distance_mm={1000.0 * RELEASE_BACKWARD_WITHDRAWAL_M:.1f} "
             f"left={left['force_n']:.3f}N/{left['pads']} "
             f"right={right['force_n']:.3f}N/{right['pads']}",
+        )
+        self.gate(
+            "release_capture_corridor",
+            monitor["minimum_capture_margin"] >= 0.0,
+            "minimum_capture_margin_mm="
+            f"{1000.0 * monitor['minimum_capture_margin']:.3f} "
+            f"final_inner_fit_margin_mm={1000.0 * inner_fit_margin:.3f}",
         )
         self.gate(
             "grippers_clear_during_release",
@@ -2305,6 +2903,24 @@ class SortingRollExpert:
         return positions, rotations
 
     def execute(self):
+        camera_report = camera_mount_report(
+            self.mujoco,
+            self.model,
+            self.data,
+        )
+        self.ct.REC["metadata"]["sdk_camera_mount_report"] = camera_report
+        self.gates["sdk_camera_mounts"] = camera_report
+        print(
+            "[gate:sdk_camera_mounts] "
+            + ("PASS " if camera_report["passed"] else "FAIL ")
+            + json.dumps(camera_report, ensure_ascii=False),
+            flush=True,
+        )
+        if not camera_report["passed"]:
+            raise ExpertFailure(
+                "recorded camera mounts do not match the SDK contract"
+            )
+
         self.frames(30)
 
         initial_targets = {
@@ -2347,12 +2963,21 @@ class SortingRollExpert:
         )
 
         self.phase("approach_table_with_arms_down")
-        self.go_to(TABLE_GRASP_XY, -math.pi / 2.0, max_speed=0.18)
+        self.go_to(
+            TABLE_GRASP_XY,
+            -math.pi / 2.0,
+            max_speed=0.18,
+            tolerance=0.003,
+        )
+        self.turn_in_place(
+            -math.pi / 2.0,
+            tolerance=0.003,
+        )
         base = self.ct.base_pose()
         self.gate(
             "table_park",
-            float(np.linalg.norm(base[:2] - TABLE_GRASP_XY)) <= 0.02
-            and abs(angle(base[2] + math.pi / 2.0)) <= 0.02,
+            float(np.linalg.norm(base[:2] - TABLE_GRASP_XY)) <= 0.006
+            and abs(angle(base[2] + math.pi / 2.0)) <= 0.004,
             f"base={np.round(base, 4).tolist()}",
         )
         measured_joints = self.arm_joint_positions()
@@ -2383,70 +3008,13 @@ class SortingRollExpert:
             + np.array([0.0, FLAT_PICK_PREGRASP_CLEARANCE_Y_M, 0.0])
             for hand, position in grasp_positions.items()
         }
-        self.phase("raise_and_flatten_after_stereo_localization")
-        branch_x, branch_y, branch_z = RIGHT_FLAT_PICK_IK_BRANCH_SEED_M
-        right_branch_seed, branch_residual, branch_rotation_residual = (
-            self.solve_one_mount_target(
-                "r",
-                self.ct.qtgt["r"].copy(),
-                np.array([
-                    -branch_x,
-                    roll[1] + branch_y,
-                    roll[2] + branch_z,
-                ]),
-                grasp_target_rotation(self.ct.R_DES, -1.0),
-            )
+        self.phase(
+            "coordinated_flat_pick_pregrasp_after_stereo_localization"
         )
-        self.gate(
-            "right_flat_pick_ik_branch_seed_reachable",
-            branch_residual <= 0.012
-            and branch_rotation_residual <= IK_ROTATION_TOLERANCE_DEG,
-            "computational_seed_only=true "
-            f"residual_mm={1000.0 * branch_residual:.2f} "
-            f"rotation_deg={branch_rotation_residual:.3f}",
+        self.follow_coordinated_flat_pick_path(
+            pregrasp_positions,
+            rotations,
         )
-        for hand, direction in (("r", -1.0), ("l", 1.0)):
-            clearance_x, clearance_y, clearance_z = (
-                FLAT_PICK_CLEARANCE_M[hand]
-            )
-            clearance_position = np.array([
-                direction * clearance_x,
-                roll[1] + clearance_y,
-                roll[2] + clearance_z,
-            ])
-            self.follow_empty_hand_stage(
-                hand,
-                "direct_flat_clearance",
-                [(clearance_position, rotations[hand])],
-                initial_ik_seed=(
-                    right_branch_seed if hand == "r" else None
-                ),
-            )
-        spans = self.pad_vertical_span()
-        self.gate(
-            "hands_flat_after_localization_raise",
-            max(spans.values()) <= 0.025,
-            "pad_vertical_span_mm="
-            + json.dumps({
-                name: round(1000.0 * span, 1)
-                for name, span in spans.items()
-            }),
-        )
-
-        self.phase("horizontal_pregrasp")
-        for hand in ("r", "l"):
-            self.follow_empty_hand_stage(
-                hand,
-                "flat_pick_pregrasp",
-                [
-                    (
-                        pregrasp_positions[hand]
-                        + np.array([0.0, 0.0, FLAT_PICK_HIGH_Z_M]),
-                        rotations[hand],
-                    ),
-                    (pregrasp_positions[hand], rotations[hand]),
-                ],
-            )
         spans = self.pad_vertical_span()
         self.gate(
             "hands_flat_before_pick",
@@ -2518,7 +3086,52 @@ class SortingRollExpert:
         )
 
         self.phase("clear_table")
-        self.reverse(TABLE_CLEAR_REVERSE_M)
+        base = self.ct.base_pose()
+        roll = self.roll_position()
+        yaw = float(base[2])
+        world_from_base = np.array([
+            [math.cos(yaw), -math.sin(yaw)],
+            [math.sin(yaw), math.cos(yaw)],
+        ])
+        carried_offset_local = (
+            world_from_base.T @ (roll[:2] - base[:2])
+        )
+        corridor_base_y = (
+            RELEASE_APPROACH_Y_BIAS_M
+            - float(carried_offset_local[1])
+        )
+        corridor_delta = np.array([
+            0.0,
+            corridor_base_y - float(base[1]),
+        ])
+        reverse_direction = -np.array([
+            math.cos(yaw),
+            math.sin(yaw),
+        ])
+        corridor_reverse_m = float(
+            np.dot(corridor_delta, reverse_direction)
+        )
+        corridor_cross_error = float(np.linalg.norm(
+            corridor_delta
+            - corridor_reverse_m * reverse_direction
+        ))
+        self.gate(
+            "shelf_corridor_reverse_plan",
+            TABLE_CLEAR_REVERSE_M <= corridor_reverse_m <= 0.60
+            and corridor_cross_error <= 0.010
+            and abs(angle(yaw + math.pi / 2.0)) <= 0.004,
+            f"distance_m={corridor_reverse_m:.4f} "
+            f"cross_error_mm={1000.0 * corridor_cross_error:.2f} "
+            f"target_y={corridor_base_y:.4f}",
+        )
+        self.reverse(corridor_reverse_m, max_speed=0.20)
+        base = self.ct.base_pose()
+        self.gate(
+            "shelf_corridor_staged",
+            abs(float(base[1]) - corridor_base_y) <= 0.010,
+            f"base={np.round(base, 4).tolist()} "
+            f"target_y={corridor_base_y:.4f}",
+        )
         self.require_held("table_clear")
 
         self.phase("rotate_to_shelf")
@@ -2534,12 +3147,37 @@ class SortingRollExpert:
         stage_center[1] = RELEASE_APPROACH_Y_BIAS_M
         stage_center[2] = roll[2]
         shelf_base = stage_center[:2] - carried_offset
+        travel_heading = math.atan2(
+            shelf_base[1] - base[1],
+            shelf_base[0] - base[0],
+        )
         print(
-            f"[transport_plan] carried_offset={np.round(carried_offset, 4).tolist()} "
-            f"base_target={np.round(shelf_base, 4).tolist()}",
+            f"[transport_plan] carried_offset="
+            f"{np.round(carried_offset, 4).tolist()} "
+            f"base_target={np.round(shelf_base, 4).tolist()} "
+            f"travel_heading_deg={math.degrees(travel_heading):.2f}",
             flush=True,
         )
-        self.go_to(shelf_base, 0.0, max_speed=0.22, tolerance=0.006)
+        self.gate(
+            "straight_shelf_approach",
+            abs(angle(travel_heading)) <= 0.05
+            and abs(angle(base[2])) <= 0.02,
+            f"base={np.round(base, 4).tolist()} "
+            f"travel_heading_deg={math.degrees(travel_heading):.2f}",
+        )
+        self.go_to(
+            shelf_base, 0.0, max_speed=0.22, tolerance=0.006
+        )
+        self.require_held("shelf_translation")
+        parked_base = self.ct.base_pose()
+        self.gate(
+            "shelf_park_pose",
+            float(np.linalg.norm(parked_base[:2] - shelf_base))
+            <= 0.010
+            and abs(angle(parked_base[2])) <= 0.015,
+            f"base={np.round(parked_base, 4).tolist()} "
+            f"target={np.round(shelf_base, 4).tolist()}",
+        )
         self.require_held("shelf_park")
 
         self.phase("align_slot_axis_above_shelf")
@@ -2694,11 +3332,11 @@ class SortingRollExpert:
         self.phase("release")
         print(
             f"[release] gripper_rate={RELEASE_GRIP_RATE:.3f}m/s "
-            f"open_raise_mm={1000.0 * RELEASE_OPEN_RAISE_M:.1f} "
-            "then withdraw along roll axis",
+            f"backward_mm={1000.0 * RELEASE_BACKWARD_WITHDRAWAL_M:.1f} "
+            "then withdraw both hands backward",
             flush=True,
         )
-        self.release_with_axis_withdrawal()
+        self.release_with_backward_withdrawal()
 
         self.phase("verify_before_retract")
         pre_retract_evidence = self.track_success()
@@ -2801,8 +3439,12 @@ class SortingRollExpert:
             self.review_video,
         )
         self.encode_frame_video(
-            self.slot_review_dir / "frame_%06d.jpg",
-            self.slot_review_video,
+            self.slot_visual_review_dir / "frame_%06d.jpg",
+            self.slot_visual_review_video,
+        )
+        self.encode_frame_video(
+            self.slot_physics_review_dir / "frame_%06d.jpg",
+            self.slot_physics_review_video,
         )
         for camera, video_path in self.robot_camera_videos.items():
             self.encode_frame_video(
@@ -2812,7 +3454,10 @@ class SortingRollExpert:
 
         width, height = self.args.width, self.args.height
         command = ["ffmpeg", "-y", "-loglevel", "error"]
-        for camera in RECORDED_CAMERAS:
+        filters = []
+        labeled_streams = []
+        font_size = max(14, height // 22)
+        for index, camera in enumerate(RECORDED_CAMERAS):
             command.extend([
                 "-framerate",
                 str(self.ct.REC_FPS),
@@ -2824,13 +3469,24 @@ class SortingRollExpert:
                     / "frame_%06d.jpg"
                 ),
             ])
+            output = f"camera_{index}"
+            parent = SDK_SENSOR_EXTRINSICS_ZYX[camera]["parent_link"]
+            filters.append(
+                f"[{index}:v]drawtext="
+                f"text='{camera} | SDK {parent}':"
+                f"x=10:y=10:fontsize={font_size}:fontcolor=white:"
+                f"box=1:boxcolor=black@0.65:boxborderw=5[{output}]"
+            )
+            labeled_streams.append(f"[{output}]")
+        filters.append(
+            "".join(labeled_streams)
+            + "xstack=inputs=4:layout="
+            + f"0_0|{width}_0|0_{height}|"
+            + f"{width}_{height}:fill=black[v]"
+        )
         command.extend([
             "-filter_complex",
-            (
-                "xstack=inputs=4:layout="
-                f"0_0|{width}_0|0_{height}|"
-                f"{width}_{height}:fill=black[v]"
-            ),
+            ";".join(filters),
             "-map",
             "[v]",
             "-c:v",
@@ -2877,7 +3533,12 @@ class SortingRollExpert:
                 ),
                 "training_eligible": False,
                 "review_video": self.review_video.name,
-                "slot_physics_review_video": self.slot_review_video.name,
+                "slot_visual_review_video": (
+                    self.slot_visual_review_video.name
+                ),
+                "slot_physics_review_video": (
+                    self.slot_physics_review_video.name
+                ),
                 "robot_camera_videos": {
                     camera: path.name
                     for camera, path in self.robot_camera_videos.items()
@@ -2904,7 +3565,12 @@ class SortingRollExpert:
             "gates": self.gates,
             "final_evidence": self.final_evidence,
             "review_video": str(self.review_video),
-            "slot_physics_review_video": str(self.slot_review_video),
+            "slot_visual_review_video": str(
+                self.slot_visual_review_video
+            ),
+            "slot_physics_review_video": str(
+                self.slot_physics_review_video
+            ),
             "robot_camera_videos": {
                 camera: str(path)
                 for camera, path in self.robot_camera_videos.items()
