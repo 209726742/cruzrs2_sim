@@ -18,7 +18,7 @@ class SortingRollSceneTest(unittest.TestCase):
     def test_layout_contract(self):
         report = scene.layout_report()
         self.assertTrue(all(report["checks"].values()), report)
-        self.assertAlmostEqual(report["edge_gap_m"], 0.7)
+        self.assertAlmostEqual(report["edge_gap_m"], 0.475)
         self.assertAlmostEqual(report["table_yaw_deg"], 180.0)
         self.assertAlmostEqual(
             report["roll_depth_from_robot_side_m"], 0.52 / 3.0
@@ -50,6 +50,10 @@ class SortingRollSceneTest(unittest.TestCase):
             atol=1e-9,
         )
         self.assertAlmostEqual(
+            np.fromstring(bodies["sorting_table"]["pos"], sep=" ")[1],
+            -1.050,
+        )
+        self.assertAlmostEqual(
             np.fromstring(geoms["table_pedestal_col"]["pos"], sep=" ")[0],
             -0.120,
         )
@@ -58,6 +62,39 @@ class SortingRollSceneTest(unittest.TestCase):
             -0.120,
         )
         self.assertEqual(geoms["sorting_roll_col"]["condim"], "6")
+
+    def test_pickup_supports_raise_roll_and_leave_flat_grasp_clear(self):
+        root = ET.parse(scene.TEMPLATE_PATH).getroot()
+        geoms = {
+            element.attrib["name"]: element.attrib
+            for element in root.iter("geom")
+            if "name" in element.attrib
+        }
+        bases = (
+            geoms["roll_support_x_negative_base_col"],
+            geoms["roll_support_x_positive_base_col"],
+        )
+        base_positions = [
+            np.fromstring(base["pos"], sep=" ") for base in bases
+        ]
+        base_sizes = [
+            np.fromstring(base["size"], sep=" ") for base in bases
+        ]
+        self.assertAlmostEqual(base_positions[0][0], -scene.ROLL_SUPPORT_X_M)
+        self.assertAlmostEqual(base_positions[1][0], scene.ROLL_SUPPORT_X_M)
+        for position, size in zip(base_positions, base_sizes):
+            self.assertAlmostEqual(
+                position[2] + size[2],
+                scene.ROLL_SUPPORT_TOP_Z_M,
+            )
+            self.assertGreaterEqual(
+                abs(position[0]) - size[0],
+                0.19,
+            )
+        self.assertAlmostEqual(
+            scene.ROLL_SPAWN[2] - scene.ROLL_SUPPORT_TOP_Z_M,
+            scene.ROLL_RADIUS_M + 0.0015,
+        )
 
     def test_template_contains_named_task_geometry(self):
         root = ET.parse(scene.TEMPLATE_PATH).getroot()
@@ -73,6 +110,8 @@ class SortingRollSceneTest(unittest.TestCase):
             "sorting_roll_free",
             "sorting_roll_col",
             "table_top_col",
+            "roll_support_x_negative_base_col",
+            "roll_support_x_positive_base_col",
             "target_slot_floor_col",
             "sorting_roll_target",
         }.issubset(names))

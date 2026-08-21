@@ -109,22 +109,49 @@
 
     <!-- Table visual: 0.60 m along world X, 0.52 m along world Y, 1.00 m high. -->
     <!-- Rotated 180 deg about world Z, around the table-top center. -->
-    <body name="sorting_table" pos="0 -1.275 0.5" quat="0.707106781 0.707106781 0 0">
+    <body name="sorting_table" pos="0 -1.050 0.5" quat="0.707106781 0.707106781 0 0">
       <geom name="sorting_table_visual" type="mesh" mesh="sorting_table_mesh"
             material="sorting_table_material" contype="0" conaffinity="0"
             group="1" density="0"/>
     </body>
-    <geom name="table_top_col" type="box" pos="0 -1.275 0.980"
+    <geom name="table_top_col" type="box" pos="0 -1.050 0.980"
           size="0.300 0.260 0.020" group="3" contype="1" conaffinity="3"
           friction="1.1 0.02 0.001"/>
-    <geom name="table_pedestal_col" type="box" pos="-0.120 -1.275 0.480"
+    <geom name="table_pedestal_col" type="box" pos="-0.120 -1.050 0.480"
           size="0.045 0.045 0.480" group="3" contype="1" conaffinity="3"/>
-    <geom name="table_base_col" type="box" pos="-0.120 -1.275 0.035"
+    <geom name="table_base_col" type="box" pos="-0.120 -1.050 0.035"
           size="0.240 0.205 0.035" group="3" contype="1" conaffinity="3"/>
+
+    <!-- Two passive U-shaped pickup stands lift the roll above the table while leaving
+         the central flat-gripper workspace unobstructed. The lips prevent side rolling. -->
+    <geom name="roll_support_x_negative_base_col" type="box"
+          pos="-0.215 -0.963333333 1.050" size="0.018 0.025 0.050"
+          group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"
+          rgba="0.12 0.32 0.78 1"/>
+    <geom name="roll_support_x_positive_base_col" type="box"
+          pos="0.215 -0.963333333 1.050" size="0.018 0.025 0.050"
+          group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"
+          rgba="0.12 0.32 0.78 1"/>
+    <geom name="roll_support_x_negative_robot_lip_col" type="box"
+          pos="-0.215 -0.943333333 1.110" size="0.018 0.005 0.010"
+          group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"
+          rgba="0.12 0.32 0.78 1"/>
+    <geom name="roll_support_x_negative_far_lip_col" type="box"
+          pos="-0.215 -0.983333333 1.110" size="0.018 0.005 0.010"
+          group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"
+          rgba="0.12 0.32 0.78 1"/>
+    <geom name="roll_support_x_positive_robot_lip_col" type="box"
+          pos="0.215 -0.943333333 1.110" size="0.018 0.005 0.010"
+          group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"
+          rgba="0.12 0.32 0.78 1"/>
+    <geom name="roll_support_x_positive_far_lip_col" type="box"
+          pos="0.215 -0.983333333 1.110" size="0.018 0.005 0.010"
+          group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"
+          rgba="0.12 0.32 0.78 1"/>
 
     <!-- Manipuland: visual mesh plus a stable, low-cost rigid-cylinder collider. -->
     <!-- One third of the table depth inward from the robot-side edge. -->
-    <body name="sorting_roll" pos="0 -1.188333333 1.0135">
+    <body name="sorting_roll" pos="0 -0.963333333 1.1135">
       <freejoint name="sorting_roll_free"/>
       <geom name="sorting_roll_visual" type="mesh" mesh="sorting_roll_mesh"
             material="sorting_roll_material" contype="0" conaffinity="0"

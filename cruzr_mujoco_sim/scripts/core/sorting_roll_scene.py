@@ -18,20 +18,24 @@ TEMPLATE_PATH = SORTING_ROOT / "sorting_roll_scene.xml"
 SCENE_PATH = PACKAGE_ROOT / "assets" / "sorting_roll_scene.xml"
 
 SHELF_BOUNDS = np.array([[0.8, -0.315, 0.0], [1.2, 0.315, 1.4]])
-TABLE_BOUNDS = np.array([[-0.3, -1.535, 0.0], [0.3, -1.015, 1.0]])
+TABLE_BOUNDS = np.array([[-0.3, -1.310, 0.0], [0.3, -0.790, 1.0]])
 TABLE_YAW_DEG = 180.0
 ROLL_DEPTH_FRACTION_FROM_ROBOT_SIDE = 1.0 / 3.0
 ROLL_SIZE = np.array([0.5, 0.025, 0.025])
+ROLL_RADIUS_M = 0.012
+ROLL_SUPPORT_X_M = 0.215
+ROLL_SUPPORT_HALF_X_M = 0.018
+ROLL_SUPPORT_TOP_Z_M = 1.100
 TABLE_DEPTH_M = float(TABLE_BOUNDS[1, 1] - TABLE_BOUNDS[0, 1])
 ROLL_SPAWN = np.array([
     0.0,
     TABLE_BOUNDS[1, 1]
     - TABLE_DEPTH_M * ROLL_DEPTH_FRACTION_FROM_ROBOT_SIDE,
-    1.0135,
+    ROLL_SUPPORT_TOP_Z_M + ROLL_RADIUS_M + 0.0015,
 ])
 TARGET_CENTER = np.array([0.7825, 0.0, 1.0125])
 TARGET_AXIS = np.array([0.0, 1.0, 0.0])
-EXPECTED_EDGE_GAP_M = 0.7
+EXPECTED_EDGE_GAP_M = 0.475
 
 
 def required_assets():
@@ -69,7 +73,7 @@ def layout_report():
         ),
         "table_is_robot_right": bool(TABLE_BOUNDS[1, 1] < 0.0),
         "shelf_is_robot_front": bool(SHELF_BOUNDS[0, 0] > 0.0),
-        "edge_gap_is_0p70m": bool(abs(edge_gap - EXPECTED_EDGE_GAP_M) < 1e-9),
+        "edge_gap_is_0p475m": bool(abs(edge_gap - EXPECTED_EDGE_GAP_M) < 1e-9),
         "table_yaw_is_180deg": bool(abs(TABLE_YAW_DEG - 180.0) < 1e-9),
         "roll_at_robot_side_third": bool(
             abs(
@@ -77,10 +81,14 @@ def layout_report():
                 - TABLE_DEPTH_M * ROLL_DEPTH_FRACTION_FROM_ROBOT_SIDE
             ) < 1e-9
         ),
-        "roll_starts_above_table": bool(
+        "roll_starts_above_pickup_support": bool(
             TABLE_BOUNDS[0, 0] <= ROLL_SPAWN[0] <= TABLE_BOUNDS[1, 0]
             and TABLE_BOUNDS[0, 1] <= ROLL_SPAWN[1] <= TABLE_BOUNDS[1, 1]
-            and ROLL_SPAWN[2] > TABLE_BOUNDS[1, 2]
+            and ROLL_SPAWN[2] > ROLL_SUPPORT_TOP_Z_M
+        ),
+        "pickup_supports_leave_center_grasp_clear": bool(
+            ROLL_SUPPORT_X_M - ROLL_SUPPORT_HALF_X_M >= 0.19
+            and ROLL_SUPPORT_X_M + ROLL_SUPPORT_HALF_X_M <= ROLL_SIZE[0] / 2.0
         ),
         "target_is_top_tier": bool(1.0 <= TARGET_CENTER[2] <= 1.2),
         "target_axis_is_shelf_width": bool(np.allclose(TARGET_AXIS, [0.0, 1.0, 0.0])),
@@ -90,6 +98,8 @@ def layout_report():
         "table_bounds_m": TABLE_BOUNDS.tolist(),
         "roll_size_m": ROLL_SIZE.tolist(),
         "roll_spawn_m": ROLL_SPAWN.tolist(),
+        "roll_support_x_m": [-ROLL_SUPPORT_X_M, ROLL_SUPPORT_X_M],
+        "roll_support_top_z_m": ROLL_SUPPORT_TOP_Z_M,
         "table_yaw_deg": TABLE_YAW_DEG,
         "roll_depth_from_robot_side_m": float(roll_depth_from_robot_side),
         "roll_depth_fraction_from_robot_side": (
@@ -135,9 +145,17 @@ def smoke_check(scene_path, steps=1000):
     roll_geom = _object_id(
         mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "sorting_roll_col"
     )
-    table_geom = _object_id(
-        mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "table_top_col"
-    )
+    support_geoms = {
+        _object_id(mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        for name in (
+            "roll_support_x_negative_base_col",
+            "roll_support_x_positive_base_col",
+            "roll_support_x_negative_robot_lip_col",
+            "roll_support_x_negative_far_lip_col",
+            "roll_support_x_positive_robot_lip_col",
+            "roll_support_x_positive_far_lip_col",
+        )
+    }
     target_site = _object_id(
         mujoco, model, mujoco.mjtObj.mjOBJ_SITE, "sorting_roll_target"
     )
@@ -150,7 +168,7 @@ def smoke_check(scene_path, steps=1000):
     supported = False
     for contact_index in range(data.ncon):
         pair = {int(data.contact[contact_index].geom1), int(data.contact[contact_index].geom2)}
-        if pair == {roll_geom, table_geom}:
+        if roll_geom in pair and pair & support_geoms:
             supported = True
             break
 
@@ -164,11 +182,13 @@ def smoke_check(scene_path, steps=1000):
             and np.isfinite(data.qvel).all()
             and np.isfinite(data.qacc).all()
         ),
-        "roll_supported_by_table": supported,
-        "roll_remains_on_table": bool(
+        "roll_supported_by_pickup_stand": supported,
+        "roll_remains_on_pickup_stand": bool(
             TABLE_BOUNDS[0, 0] <= roll_position[0] <= TABLE_BOUNDS[1, 0]
-            and TABLE_BOUNDS[0, 1] <= roll_position[1] <= TABLE_BOUNDS[1, 1]
-            and 1.0 <= roll_position[2] <= 1.04
+            and abs(float(roll_position[1] - ROLL_SPAWN[1])) <= 0.025
+            and ROLL_SUPPORT_TOP_Z_M + ROLL_RADIUS_M - 0.005
+            <= roll_position[2]
+            <= ROLL_SUPPORT_TOP_Z_M + ROLL_RADIUS_M + 0.02
         ),
         "roll_settled": bool(roll_speed < 0.05),
         "target_site_matches_contract": bool(

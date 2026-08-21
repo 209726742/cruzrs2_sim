@@ -24,32 +24,43 @@ from sorting_roll_scene import (
 )
 
 
-TASK_VERSION = "sorting_roll_v2"
+TASK_VERSION = "sorting_roll_v3"
 POLICY_CAMERAS = ("stereo_left", "stereo_right", "waist_front")
+REVIEW_ONLY_CAMERAS = ("hand_left", "hand_right")
+RECORDED_CAMERAS = POLICY_CAMERAS + REVIEW_ONLY_CAMERAS
 FLAT_REGRASP_ORDER = (("r", "l", -1.0), ("l", "r", 1.0))
 TARGET_CENTER = np.array(SCENE_TARGET_CENTER, dtype=float, copy=True)
 TARGET_AXIS = np.array(SCENE_TARGET_AXIS, dtype=float, copy=True)
 ROLL_HALF_LENGTH = 0.25
 ROLL_RADIUS = 0.012
 SLOT_HALF_WIDTH = 0.015
-TABLE_OBSERVATION_XY = np.array([0.0, -0.45])
-TABLE_GRASP_XY = np.array([0.0, -0.70])
-SHELF_STAGE_OFFSET_X = -0.065
+TABLE_OBSERVATION_XY = np.array([0.0, -0.22])
+TABLE_GRASP_XY = np.array([0.0, -0.47])
+SHELF_STAGE_OFFSET_X = -0.0325
+TABLE_CLEAR_REVERSE_M = 0.22
+FLAT_PICK_TARGET_ALONG_M = 0.160
+FLAT_PICK_TIP_BIAS_Y_M = 0.034
+FLAT_PICK_PREGRASP_CLEARANCE_Y_M = 0.080
+FLAT_PICK_CLEARANCE_X_M = 0.320
+FLAT_PICK_CLEARANCE_Y_M = 0.240
+FLAT_PICK_CLEARANCE_Z_M = 0.240
+FLAT_PICK_HIGH_Z_M = 0.060
+FLAT_PICK_LIFT_M = 0.085
 PRE_RELEASE_Y_TOLERANCE_M = 0.003
 PRE_RELEASE_ENDPOINT_MARGIN_M = 0.020
 ARM_RETRACT_M = 0.082
 HAND_FLAT_ROLL_Z = 1.240
 RELEASE_ROLL_Z = 1.128
-RELEASE_APPROACH_Y_BIAS_M = 0.008
+RELEASE_APPROACH_Y_BIAS_M = 0.000
 RELEASE_PRE_TOUCH_X_M = 0.7850
 RELEASE_TOUCH_STEP_M = 0.0001
 RELEASE_TOUCH_MAX_STEPS = 40
 RELEASE_TOUCH_MIN_FORCE_N = 0.02
 RELEASE_TOUCH_MAX_FORCE_N = 5.0
 RELEASE_WRIST_LEVEL_DEG = 4.0
-RELEASE_TIP_REGRASP_X_M = {"l": -0.035, "r": -0.034}
+RELEASE_TIP_REGRASP_X_M = {"l": -0.004, "r": -0.004}
 RELEASE_TIP_REGRASP_STAGE_X_M = 0.750
-RELEASE_INSERT_STEP_M = 0.002
+RELEASE_INSERT_STEP_M = 0.008
 RELEASE_OPEN_RAISE_M = 0.004
 RELEASE_AXIS_COARSE_STEP_M = 0.004
 RELEASE_AXIS_FINE_STEP_M = 0.0001
@@ -90,18 +101,22 @@ EMPTY_HAND_SERVO_MAX_STEP_RAD = 0.012
 ONE_HAND_SUPPORT_DROP_TOLERANCE_M = 0.025
 IK_ROTATION_TOLERANCE_DEG = 5.0
 SLOT_X_COMMAND_BIAS = -0.0003
-RELEASE_GRIP_RATE = 0.022
-BASE_ACCEL = 0.5
-BASE_YAW_ACCEL = 0.2
+RELEASE_GRIP_RATE = 0.035
+BASE_ACCEL = 0.8
+BASE_YAW_ACCEL = 0.6
+BASE_MAX_SPEED = 0.24
+BASE_MAX_YAW_RATE = 0.45
 CONTROL_FPS = 60.0
-GRASP_X = 0.13
-GRASP_Y_BIAS = 0.009
-GRASP_MOUNT_Z = 1.135
 GRIP_FORCE_MIN_N = 0.2
 HOLD_CONTACT_RECOVERY_TICKS = 30
 ARM_TRACK_TOL_RAD = 0.03
-ARM_TRACK_STABLE_TICKS = 12
+ARM_TRACK_STABLE_TICKS = 6
 ARM_TRACK_MAX_TICKS = 900
+ARM_SERVO_MAX_STEP_RAD = 0.010
+ARM_SERVO_MIN_TICKS = 18
+ARM_SERVO_SETTLE_TICKS = 12
+GRASP_SETTLE_TICKS = 60
+RELEASE_OPEN_TICKS = 60
 
 
 class ExpertFailure(RuntimeError):
@@ -346,6 +361,17 @@ def anchored_mount_position(
     return target_anchor_position - target_rotation @ anchor_in_mount
 
 
+def mount_position_for_pad_target(
+    target_pad_position,
+    target_rotation,
+    pad_offset_in_mount,
+):
+    return np.asarray(target_pad_position, dtype=float) - (
+        np.asarray(target_rotation, dtype=float)
+        @ np.asarray(pad_offset_in_mount, dtype=float)
+    )
+
+
 def roll_half_extent_x(axis_x):
     axis_x = abs(float(axis_x))
     return (
@@ -412,7 +438,7 @@ def load_teleop(scene_path, gpu, seed):
     os.environ["TELEOP_RECORD_GPU"] = str(gpu)
     os.environ["CRUZR_GRIP_CLOSE"] = "0.025"
     os.environ["CRUZR_EP_SEED"] = str(seed)
-    os.environ["REC_CAMS"] = ",".join(POLICY_CAMERAS)
+    os.environ["REC_CAMS"] = ",".join(RECORDED_CAMERAS)
     os.environ["REC_SAVE_RAW_TIMESTAMPS"] = "1"
     os.environ["REC_PROMPT"] = (
         "Pick up the roll from the table and place it stably in the top shelf slot"
@@ -459,6 +485,13 @@ class SortingRollExpert:
         self.out = Path(args.out).resolve()
         self.review_dir = self.out / "diagnostics" / "third_person"
         self.review_video = self.out / "sorting_roll_review.mp4"
+        self.robot_camera_videos = {
+            camera: self.out / f"sorting_roll_{camera}.mp4"
+            for camera in RECORDED_CAMERAS
+        }
+        self.robot_multiview_video = (
+            self.out / "sorting_roll_robot_multiview.mp4"
+        )
         self.result_path = self.out / "result.json"
         self.roll_body = ct.bid("sorting_roll")
         self.roll_geom = ct.gid("sorting_roll_col")
@@ -468,6 +501,17 @@ class SortingRollExpert:
         self.pad_ids = {
             ct.gid(name)
             for name in ("L_pad1", "L_pad2", "R_pad1", "R_pad2")
+        }
+        self.pickup_support_geom_ids = {
+            ct.gid(name)
+            for name in (
+                "roll_support_x_negative_base_col",
+                "roll_support_x_positive_base_col",
+                "roll_support_x_negative_robot_lip_col",
+                "roll_support_x_negative_far_lip_col",
+                "roll_support_x_positive_robot_lip_col",
+                "roll_support_x_positive_far_lip_col",
+            )
         }
         self.release_touch_geom_ids = {
             ct.gid("target_middle_bar_col")
@@ -521,11 +565,15 @@ class SortingRollExpert:
             "metadata": {
                 "task_version": TASK_VERSION,
                 "seed": args.seed,
-                "collection_profile": "sorting_roll_canary_v2",
+                "collection_profile": "sorting_roll_canary_v3_supported_fast",
                 "training_eligible": False,
                 "success_source": "sorting_roll_task.SortingRollSuccessTracker",
                 "policy_cameras": list(POLICY_CAMERAS),
-                "review_camera": "free_camera_not_policy_input",
+                "review_only_cameras": list(REVIEW_ONLY_CAMERAS),
+                "recorded_cameras": list(RECORDED_CAMERAS),
+                "review_camera": (
+                    "free_camera_azimuth_135_not_policy_input"
+                ),
                 "release_pad_sliding_friction": (
                     RELEASE_PAD_SLIDING_FRICTION
                 ),
@@ -534,9 +582,9 @@ class SortingRollExpert:
 
         self.review_camera = mujoco.MjvCamera()
         self.review_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-        self.review_camera.lookat[:] = [0.45, -0.72, 0.72]
-        self.review_camera.distance = 3.35
-        self.review_camera.azimuth = 42.0
+        self.review_camera.lookat[:] = [0.40, -0.45, 0.76]
+        self.review_camera.distance = 3.15
+        self.review_camera.azimuth = 135.0
         self.review_camera.elevation = -24.0
 
     def phase(self, name):
@@ -729,7 +777,12 @@ class SortingRollExpert:
     def brake_cap(remaining, acceleration):
         return math.sqrt(max(0.0, 2.0 * acceleration * abs(float(remaining))))
 
-    def turn_in_place(self, target_yaw, max_rate=0.22, tolerance=0.012):
+    def turn_in_place(
+        self,
+        target_yaw,
+        max_rate=BASE_MAX_YAW_RATE,
+        tolerance=0.012,
+    ):
         self.stop_base()
         for _ in range(2400):
             error = angle(target_yaw - self.ct.base_pose()[2])
@@ -748,7 +801,13 @@ class SortingRollExpert:
             raise ExpertFailure(f"turn timeout target={target_yaw:.3f}")
         self.stop_base()
 
-    def go_to(self, target_xy, target_yaw, max_speed=0.16, tolerance=0.008):
+    def go_to(
+        self,
+        target_xy,
+        target_yaw,
+        max_speed=BASE_MAX_SPEED,
+        tolerance=0.008,
+    ):
         target_xy = np.asarray(target_xy, dtype=float)
         pose = self.ct.base_pose()
         if float(np.linalg.norm(target_xy - pose[:2])) > tolerance:
@@ -771,7 +830,7 @@ class SortingRollExpert:
             )
             speed = min(max(0.025, distance), speed_cap)
             yaw_cap = min(
-                0.18,
+                BASE_MAX_YAW_RATE,
                 self.brake_cap(heading_error, BASE_YAW_ACCEL),
             )
             self.set_base_velocity(
@@ -784,7 +843,7 @@ class SortingRollExpert:
         self.stop_base()
         self.turn_in_place(target_yaw)
 
-    def reverse(self, distance, max_speed=0.08):
+    def reverse(self, distance, max_speed=0.16):
         start = self.ct.base_pose()
         yaw = float(start[2])
         target = start[:2] - float(distance) * np.array(
@@ -851,7 +910,12 @@ class SortingRollExpert:
         self.mujoco.mj_forward(self.model, self.data)
         return targets, residuals, rotation_residuals
 
-    def servo_arms(self, targets, max_step=0.006, minimum=30):
+    def servo_arms(
+        self,
+        targets,
+        max_step=ARM_SERVO_MAX_STEP_RAD,
+        minimum=ARM_SERVO_MIN_TICKS,
+    ):
         distance = max(
             float(np.max(np.abs(targets[hand] - self.ct.qtgt[hand])))
             for hand in ("l", "r")
@@ -866,7 +930,7 @@ class SortingRollExpert:
                 )
             self.ct.base_vel[:] = 0.0
             self.frames(1)
-        self.frames(20)
+        self.frames(ARM_SERVO_SETTLE_TICKS)
 
     def wait_arm_tracking(
         self,
@@ -1588,7 +1652,11 @@ class SortingRollExpert:
 
             self.phase(f"regrasp_{hand}_flat")
             self.ct.grip_cmd[hand] = self.ct.GRIP_CLOSE
-            self.frames(120)
+            self.open_hand_until_released(
+                hand,
+                "before_release_tip_shift",
+                max_ticks=60,
+            )
             self.require_held(f"{hand}_flat_regrasp")
             self.gate(
                 f"one_hand_support_height_{hand}",
@@ -1748,7 +1816,7 @@ class SortingRollExpert:
             yaw_correction = math.atan2(float(axis[0]), float(axis[1]))
             target_yaw = angle(self.ct.base_pose()[2] + yaw_correction)
             self.turn_in_place(
-                target_yaw, max_rate=0.08, tolerance=0.0002
+                target_yaw, max_rate=0.20, tolerance=0.0002
             )
             self.require_held(held_stage)
         axis = self.roll_axis()
@@ -1883,31 +1951,29 @@ class SortingRollExpert:
         )
 
     def level_release_support_surfaces(self):
-        remaining_deg = abs(RELEASE_WRIST_LEVEL_DEG)
-        direction = math.copysign(1.0, RELEASE_WRIST_LEVEL_DEG)
-        while remaining_deg > 1e-9:
-            step_deg = direction * min(1.0, remaining_deg)
-            axis = self.roll_axis()
-            turn = rotation_axis_angle(axis, math.radians(step_deg))
-            positions = {}
-            rotations = {}
-            for hand, arm in (("l", self.ct.L), ("r", self.ct.R)):
-                mount_position = self.data.xpos[arm.mount].copy()
-                mount_rotation = (
-                    self.data.xmat[arm.mount].reshape(3, 3).copy()
-                )
-                anchor = arm.padmid().copy()
-                target_rotation = turn @ mount_rotation
-                positions[hand] = anchored_mount_position(
-                    mount_position,
-                    mount_rotation,
-                    anchor,
-                    target_rotation,
-                )
-                rotations[hand] = target_rotation
-            self.move_mounts(positions, rotations, iterations=400)
-            self.require_held("levelling_release_support_surfaces")
-            remaining_deg -= abs(step_deg)
+        axis = self.roll_axis()
+        turn = rotation_axis_angle(
+            axis,
+            math.radians(RELEASE_WRIST_LEVEL_DEG),
+        )
+        positions = {}
+        rotations = {}
+        for hand, arm in (("l", self.ct.L), ("r", self.ct.R)):
+            mount_position = self.data.xpos[arm.mount].copy()
+            mount_rotation = (
+                self.data.xmat[arm.mount].reshape(3, 3).copy()
+            )
+            anchor = arm.padmid().copy()
+            target_rotation = turn @ mount_rotation
+            positions[hand] = anchored_mount_position(
+                mount_position,
+                mount_rotation,
+                anchor,
+                target_rotation,
+            )
+            rotations[hand] = target_rotation
+        self.move_mounts(positions, rotations, iterations=400)
+        self.require_held("levelling_release_support_surfaces")
         spans = self.pad_vertical_span()
         self.gate(
             "release_support_surfaces_levelled",
@@ -1923,7 +1989,7 @@ class SortingRollExpert:
         for hand, support in (("r", "l"), ("l", "r")):
             self.phase(f"release_{hand}_for_tip_regrasp")
             self.ct.grip_cmd[hand] = self.ct.GRIP_OPEN
-            self.frames(120)
+            self.frames(GRASP_SETTLE_TICKS)
             self.require_hand_held(
                 support, f"supporting_{hand}_tip_regrasp"
             )
@@ -2017,7 +2083,7 @@ class SortingRollExpert:
         self.ct.GRIP_RATE = RELEASE_GRIP_RATE
         self.ct.grip_cmd["l"] = self.ct.GRIP_OPEN
         self.ct.grip_cmd["r"] = self.ct.GRIP_OPEN
-        self.frames(120)
+        self.frames(RELEASE_OPEN_TICKS)
 
         self.move_mount_commands_delta([
             0.0,
@@ -2116,6 +2182,44 @@ class SortingRollExpert:
                 return evidence
         return evidence
 
+    def flat_pick_mount_poses(self, roll_position):
+        roll_position = np.asarray(roll_position, dtype=float)
+        roll_axis = (
+            self.data.xmat[self.roll_body].reshape(3, 3)[:, 0].copy()
+        )
+        if roll_axis[0] < 0.0:
+            roll_axis = -roll_axis
+        roll_axis /= float(np.linalg.norm(roll_axis))
+        positions = {}
+        rotations = {}
+        for hand, arm, direction in (
+            ("l", self.ct.L, 1.0),
+            ("r", self.ct.R, -1.0),
+        ):
+            mount_position = self.data.xpos[arm.mount].copy()
+            mount_rotation = (
+                self.data.xmat[arm.mount].reshape(3, 3).copy()
+            )
+            pad_offset_in_mount = (
+                mount_rotation.T @ (arm.padmid() - mount_position)
+            )
+            target_rotation = flatten_target_rotation(
+                grasp_target_rotation(self.ct.R_DES, direction),
+                1.0,
+            )
+            target_pad_position = (
+                roll_position
+                + direction * FLAT_PICK_TARGET_ALONG_M * roll_axis
+                + np.array([0.0, FLAT_PICK_TIP_BIAS_Y_M, 0.0])
+            )
+            positions[hand] = mount_position_for_pad_target(
+                target_pad_position,
+                target_rotation,
+                pad_offset_in_mount,
+            )
+            rotations[hand] = target_rotation
+        return positions, rotations
+
     def execute(self):
         self.frames(30)
 
@@ -2129,7 +2233,7 @@ class SortingRollExpert:
         self.go_to(
             TABLE_OBSERVATION_XY,
             -math.pi / 2.0,
-            max_speed=0.12,
+            max_speed=0.20,
         )
         target_motion = max(
             float(np.max(np.abs(self.ct.qtgt[hand] - initial_targets[hand])))
@@ -2160,30 +2264,9 @@ class SortingRollExpert:
 
         self.phase("observe_roll")
         self.frames(45)
-        roll = self.roll_position()
 
-        self.phase("raise_arms_after_observation")
-        pregrasp_positions = {
-            "l": np.array([GRASP_X, roll[1] + GRASP_Y_BIAS, GRASP_MOUNT_Z + 0.10]),
-            "r": np.array([-GRASP_X, roll[1] + GRASP_Y_BIAS, GRASP_MOUNT_Z + 0.10]),
-        }
-        rotations = {
-            "l": grasp_target_rotation(self.ct.R_DES, 1.0),
-            "r": grasp_target_rotation(self.ct.R_DES, -1.0),
-        }
-        self.move_mounts(
-            pregrasp_positions,
-            rotations,
-            iterations=1200,
-            solve_base_pose=[
-                TABLE_GRASP_XY[0],
-                TABLE_GRASP_XY[1],
-                -math.pi / 2.0,
-            ],
-        )
-
-        self.phase("approach_table_for_grasp")
-        self.go_to(TABLE_GRASP_XY, -math.pi / 2.0, max_speed=0.08)
+        self.phase("approach_table_with_arms_down")
+        self.go_to(TABLE_GRASP_XY, -math.pi / 2.0, max_speed=0.18)
         base = self.ct.base_pose()
         self.gate(
             "table_park",
@@ -2191,58 +2274,134 @@ class SortingRollExpert:
             and abs(angle(base[2] + math.pi / 2.0)) <= 0.02,
             f"base={np.round(base, 4).tolist()}",
         )
+        measured_joints = self.arm_joint_positions()
+        target_motion = max(
+            float(np.max(np.abs(self.ct.qtgt[hand] - initial_targets[hand])))
+            for hand in ("l", "r")
+        )
+        measured_motion = max(
+            float(np.max(np.abs(
+                measured_joints[hand] - initial_joints[hand]
+            )))
+            for hand in ("l", "r")
+        )
+        self.gate(
+            "arms_unchanged_through_table_approach",
+            target_motion <= 1e-12 and measured_motion <= 0.03,
+            f"target_motion_rad={target_motion:.6f} "
+            f"measured_motion_rad={measured_motion:.4f}",
+        )
 
-        self.phase("pregrasp")
-        self.move_mounts(pregrasp_positions, rotations, iterations=1200)
-
-        self.phase("lower_and_grasp")
-        grasp_positions = {
-            "l": np.array([GRASP_X, roll[1] + GRASP_Y_BIAS, GRASP_MOUNT_Z]),
-            "r": np.array([-GRASP_X, roll[1] + GRASP_Y_BIAS, GRASP_MOUNT_Z]),
+        roll = self.roll_position()
+        grasp_positions, rotations = self.flat_pick_mount_poses(roll)
+        pregrasp_positions = {
+            hand: position
+            + np.array([0.0, FLAT_PICK_PREGRASP_CLEARANCE_Y_M, 0.0])
+            for hand, position in grasp_positions.items()
         }
+        self.phase("prepare_flat_grasp_after_observation")
+        for hand, direction in (("r", -1.0), ("l", 1.0)):
+            clearance_position = np.array([
+                direction * FLAT_PICK_CLEARANCE_X_M,
+                roll[1] + FLAT_PICK_CLEARANCE_Y_M,
+                roll[2] + FLAT_PICK_CLEARANCE_Z_M,
+            ])
+            clearance_rotation = grasp_target_rotation(
+                self.ct.R_DES,
+                direction,
+            )
+            self.follow_empty_hand_stage(
+                hand,
+                "flat_pick_clearance",
+                [(clearance_position, clearance_rotation)],
+            )
+
+        self.phase("horizontal_pregrasp")
+        for hand in ("r", "l"):
+            self.follow_empty_hand_stage(
+                hand,
+                "flat_pick_pregrasp",
+                [
+                    (
+                        pregrasp_positions[hand]
+                        + np.array([0.0, 0.0, FLAT_PICK_HIGH_Z_M]),
+                        rotations[hand],
+                    ),
+                    (pregrasp_positions[hand], rotations[hand]),
+                ],
+            )
+        spans = self.pad_vertical_span()
+        self.gate(
+            "hands_flat_before_pick",
+            max(spans.values()) <= 0.025,
+            "pad_vertical_span_mm="
+            + json.dumps({
+                name: round(1000.0 * span, 1)
+                for name, span in spans.items()
+            }),
+        )
+        all_arm_ids = self.arm_geom_ids["l"] | self.arm_geom_ids["r"]
+        support_contact = self.contact_evidence(
+            all_arm_ids,
+            self.pickup_support_geom_ids,
+        )
+        self.gate(
+            "flat_hands_clear_pickup_support_before_grasp",
+            support_contact["force_n"] <= 0.2,
+            f"force_n={support_contact['force_n']:.4f} "
+            f"pairs={support_contact['pairs']}",
+        )
+
+        self.phase("horizontal_approach_and_grasp")
         self.move_mounts(grasp_positions, rotations, iterations=1200)
         self.ct.grip_cmd["l"] = self.ct.GRIP_CLOSE
         self.ct.grip_cmd["r"] = self.ct.GRIP_CLOSE
-        self.frames(120)
+        self.frames(GRASP_SETTLE_TICKS)
+        self.require_held("flat_pickup")
 
-        self.phase("lift")
-        table_height = float(self.roll_position()[2])
-        lift_positions = {
-            "l": self.data.xpos[self.ct.L.mount].copy() + [0.0, 0.0, 0.10],
-            "r": self.data.xpos[self.ct.R.mount].copy() + [0.0, 0.0, 0.10],
-        }
-        lift_rotations = {
-            "l": self.data.xmat[self.ct.L.mount].reshape(3, 3).copy(),
-            "r": self.data.xmat[self.ct.R.mount].reshape(3, 3).copy(),
-        }
-        self.move_mounts(lift_positions, lift_rotations, iterations=800)
-        self.frames(30)
-        lifted = float(self.roll_position()[2] - table_height)
-        self.require_held("lift")
-        self.gate("lift_height", lifted >= 0.075, f"lifted={lifted:.4f}m")
-
-        self.phase("raise_for_full_hand_flattening")
-        for _ in range(10):
-            height_error = HAND_FLAT_ROLL_Z - float(self.roll_position()[2])
-            if height_error <= 0.003:
-                break
-            self.move_mounts_delta(
-                [0.0, 0.0, min(0.03, height_error + 0.002)]
-            )
-            self.require_held("raising_for_flattening")
+        self.phase("lift_flat_from_pickup_support")
+        support_height = float(self.roll_position()[2])
+        self.move_mount_commands_delta([0.0, 0.0, FLAT_PICK_LIFT_M])
+        self.frames(15)
+        lifted = float(self.roll_position()[2] - support_height)
+        self.require_held("flat_support_lift")
         self.gate(
-            "full_flattening_height",
-            self.roll_position()[2] >= HAND_FLAT_ROLL_Z - 0.005,
-            f"target_z={HAND_FLAT_ROLL_Z:.4f} "
-            f"actual_z={self.roll_position()[2]:.4f}",
+            "flat_support_lift_height",
+            lifted >= FLAT_PICK_LIFT_M - 0.015,
+            f"lifted={lifted:.4f}m",
+        )
+        roll_support_contact = self.contact_evidence(
+            {self.roll_geom},
+            self.pickup_support_geom_ids,
+        )
+        hand_support_contact = self.contact_evidence(
+            all_arm_ids,
+            self.pickup_support_geom_ids,
+        )
+        self.gate(
+            "pickup_support_cleared_after_lift",
+            roll_support_contact["force_n"] <= 0.05
+            and hand_support_contact["force_n"] <= 0.2,
+            f"roll_force_n={roll_support_contact['force_n']:.4f} "
+            f"hand_force_n={hand_support_contact['force_n']:.4f} "
+            f"hand_pairs={hand_support_contact['pairs']}",
+        )
+        spans = self.pad_vertical_span()
+        axis = self.data.xmat[self.roll_body].reshape(3, 3)[:, 0]
+        self.gate(
+            "hands_remain_flat_after_pick",
+            max(spans.values()) <= 0.025
+            and abs(float(axis[2])) <= 0.02,
+            "pad_vertical_span_mm="
+            + json.dumps({
+                name: round(1000.0 * span, 1)
+                for name, span in spans.items()
+            })
+            + f" roll_axis={np.round(axis, 6).tolist()}",
         )
 
-        self.phase("flatten_hands")
-        self.flatten_hands()
-        self.require_held("hands_flat")
-
         self.phase("clear_table")
-        self.reverse(0.30)
+        self.reverse(TABLE_CLEAR_REVERSE_M)
         self.require_held("table_clear")
 
         self.phase("rotate_to_shelf")
@@ -2263,7 +2422,7 @@ class SortingRollExpert:
             f"base_target={np.round(shelf_base, 4).tolist()}",
             flush=True,
         )
-        self.go_to(shelf_base, 0.0, max_speed=0.12, tolerance=0.006)
+        self.go_to(shelf_base, 0.0, max_speed=0.22, tolerance=0.006)
         self.require_held("shelf_park")
 
         self.phase("align_slot_axis_above_shelf")
@@ -2308,69 +2467,34 @@ class SortingRollExpert:
         )
         self.require_held("release_surfaces_levelled")
 
-        insert_target = low_stage.copy()
-        insert_target[0] = RELEASE_PRE_TOUCH_X_M
-        tip_regrasp_stage = low_stage.copy()
-        tip_regrasp_stage[0] = RELEASE_TIP_REGRASP_STAGE_X_M
-
-        self.phase("align_slot_axis_before_tip_regrasp_stage")
-        self.align_roll_axis_with_arms(
-            "aligning_slot_axis_before_tip_regrasp_stage",
-            "slot_axis_before_tip_regrasp_stage",
-        )
-
-        self.phase("recenter_before_tip_regrasp_stage")
-        self.align_roll_center(
-            low_stage,
-            "center_before_tip_regrasp_stage",
-            [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
-            command_space=True,
-            max_step=0.004,
-            attempts=6,
-        )
-        self.require_held("centered_before_tip_regrasp_stage")
-
-        self.phase("verify_slot_axis_before_tip_regrasp_stage")
-        stage_axis = self.roll_axis()
-        self.gate(
-            "slot_axis_ready_for_tip_regrasp_stage",
-            abs(float(stage_axis[0])) <= 0.0008
-            and abs(float(stage_axis[2])) <= 0.02,
-            f"axis={np.round(stage_axis, 6).tolist()}",
-        )
-
-        self.phase("slow_forward_to_tip_regrasp_stage")
-        self.slowly_insert_roll(
-            tip_regrasp_stage,
-            max_step=RELEASE_INSERT_STEP_M,
-        )
-        self.require_held("tip_regrasp_stage")
-
-        self.phase("regrasp_at_release_tips")
+        self.phase("position_grip_at_release_edge")
         self.regrasp_at_release_tips()
         self.align_roll_center(
-            tip_regrasp_stage,
-            "after_release_tip_regrasp",
+            low_stage,
+            "after_release_edge_positioning",
             [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
             command_space=True,
             max_step=0.004,
             attempts=8,
         )
-        self.require_held("release_tip_regrasp")
+        self.require_held("release_edge_positioned")
 
-        self.phase("fine_align_slot_axis_with_arms")
+        insert_target = low_stage.copy()
+        insert_target[0] = RELEASE_PRE_TOUCH_X_M
+
+        self.phase("fine_align_slot_axis_before_insert")
         self.align_roll_axis_with_arms(
             "fine_aligning_slot_axis",
             "slot_axis_fine_alignment",
         )
 
-        self.phase("recenter_low_stage_after_axis_alignment")
+        self.phase("recenter_low_stage_before_insert")
         self.align_roll_center(
-            tip_regrasp_stage,
+            low_stage,
             "low_stage_recentered",
             [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
             command_space=True,
-            max_step=0.004,
+            max_step=0.006,
             attempts=6,
         )
         self.require_held("low_stage_recentered")
@@ -2467,7 +2591,21 @@ class SortingRollExpert:
             self.data.xpos[self.ct.L.mount, 0],
             self.data.xpos[self.ct.R.mount, 0],
         ]))
-        self.move_mounts_delta([-ARM_RETRACT_M, 0.0, 0.0])
+        retract_positions = {
+            "l": self.data.xpos[self.ct.L.mount].copy()
+            + [-ARM_RETRACT_M, 0.0, 0.0],
+            "r": self.data.xpos[self.ct.R.mount].copy()
+            + [-ARM_RETRACT_M, 0.0, 0.0],
+        }
+        retract_rotations = {
+            "l": self.data.xmat[self.ct.L.mount].reshape(3, 3).copy(),
+            "r": self.data.xmat[self.ct.R.mount].reshape(3, 3).copy(),
+        }
+        self.move_mounts(
+            retract_positions,
+            retract_rotations,
+            iterations=400,
+        )
         end_mount_x = float(np.mean([
             self.data.xpos[self.ct.L.mount, 0],
             self.data.xpos[self.ct.R.mount, 0],
@@ -2498,9 +2636,18 @@ class SortingRollExpert:
             ),
         )
         self.frames(60)
+        self.gate(
+            "episode_under_two_minutes",
+            self.sim_seconds <= 120.0,
+            f"sim_seconds={self.sim_seconds:.3f}",
+        )
+        self.gates["episode_under_one_minute_target"] = {
+            "passed": bool(self.sim_seconds <= 60.0),
+            "detail": f"sim_seconds={self.sim_seconds:.3f}",
+        }
         return True
 
-    def encode_review_video(self):
+    def encode_frame_video(self, frame_pattern, output_path):
         command = [
             "ffmpeg",
             "-y",
@@ -2509,15 +2656,59 @@ class SortingRollExpert:
             "-framerate",
             str(self.ct.REC_FPS),
             "-i",
-            str(self.review_dir / "frame_%06d.jpg"),
+            str(frame_pattern),
             "-c:v",
             "libx264",
             "-pix_fmt",
             "yuv420p",
             "-crf",
             "20",
-            str(self.review_video),
+            str(output_path),
         ]
+        subprocess.run(command, check=True)
+
+    def encode_review_videos(self):
+        self.encode_frame_video(
+            self.review_dir / "frame_%06d.jpg",
+            self.review_video,
+        )
+        for camera, video_path in self.robot_camera_videos.items():
+            self.encode_frame_video(
+                self.out / "frames" / camera / "frame_%06d.jpg",
+                video_path,
+            )
+
+        width, height = self.args.width, self.args.height
+        command = ["ffmpeg", "-y", "-loglevel", "error"]
+        for camera in RECORDED_CAMERAS:
+            command.extend([
+                "-framerate",
+                str(self.ct.REC_FPS),
+                "-i",
+                str(
+                    self.out
+                    / "frames"
+                    / camera
+                    / "frame_%06d.jpg"
+                ),
+            ])
+        command.extend([
+            "-filter_complex",
+            (
+                "xstack=inputs=5:layout="
+                f"0_0|{width}_0|{2 * width}_0|"
+                f"0_{height}|{width}_{height}:fill=black[v]"
+            ),
+            "-map",
+            "[v]",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "22",
+            str(self.robot_multiview_video),
+        ])
         subprocess.run(command, check=True)
 
     def finalize(self, success, error=None):
@@ -2554,6 +2745,11 @@ class SortingRollExpert:
                 ),
                 "training_eligible": False,
                 "review_video": self.review_video.name,
+                "robot_camera_videos": {
+                    camera: path.name
+                    for camera, path in self.robot_camera_videos.items()
+                },
+                "robot_multiview_video": self.robot_multiview_video.name,
             })
             meta_path.write_text(
                 json.dumps(meta, ensure_ascii=False, indent=2),
@@ -2562,7 +2758,7 @@ class SortingRollExpert:
 
         self.recorder.close()
         if self.recorder.n:
-            self.encode_review_video()
+            self.encode_review_videos()
 
         result = {
             "task": "sorting_roll_cruzr",
@@ -2575,6 +2771,11 @@ class SortingRollExpert:
             "gates": self.gates,
             "final_evidence": self.final_evidence,
             "review_video": str(self.review_video),
+            "robot_camera_videos": {
+                camera: str(path)
+                for camera, path in self.robot_camera_videos.items()
+            },
+            "robot_multiview_video": str(self.robot_multiview_video),
         }
         self.result_path.write_text(
             json.dumps(result, ensure_ascii=False, indent=2),

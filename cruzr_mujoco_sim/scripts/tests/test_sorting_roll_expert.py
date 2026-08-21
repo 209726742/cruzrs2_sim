@@ -13,6 +13,8 @@ sys.path.insert(0, str(COLLECTION_DIR))
 
 from sorting_roll_expert import (
     ARM_RETRACT_M,
+    BASE_MAX_SPEED,
+    BASE_MAX_YAW_RATE,
     FLAT_REGRASP_ANGLE_DEG,
     FLAT_REGRASP_ANCHOR_CORRECTION_MAX_M,
     FLAT_REGRASP_ANCHOR_CORRECTION_TARGET_M,
@@ -24,6 +26,13 @@ from sorting_roll_expert import (
     FLAT_REGRASP_NEAR_END_M,
     FLAT_REGRASP_ORDER,
     FLAT_REGRASP_TARGET_ALONG_M,
+    FLAT_PICK_CLEARANCE_X_M,
+    FLAT_PICK_CLEARANCE_Y_M,
+    FLAT_PICK_CLEARANCE_Z_M,
+    FLAT_PICK_HIGH_Z_M,
+    FLAT_PICK_PREGRASP_CLEARANCE_Y_M,
+    FLAT_PICK_TARGET_ALONG_M,
+    FLAT_PICK_TIP_BIAS_Y_M,
     GRASP_YAW_DEG,
     INSERT_AXIS_X_SAFETY_LIMIT,
     INSERT_AXIS_Z_SAFETY_LIMIT,
@@ -43,6 +52,9 @@ from sorting_roll_expert import (
     RELEASE_TIP_REGRASP_STAGE_X_M,
     RELEASE_TOUCH_STEP_M,
     RELEASE_WRIST_LEVEL_DEG,
+    POLICY_CAMERAS,
+    RECORDED_CAMERAS,
+    REVIEW_ONLY_CAMERAS,
     TASK_VERSION,
     TARGET_CENTER,
     TARGET_AXIS,
@@ -59,6 +71,7 @@ from sorting_roll_expert import (
     grasp_target_rotation,
     insertion_axis_is_safe,
     insertion_axis_correction_has_clearance,
+    mount_position_for_pad_target,
     rotation_x,
     rotation_axis_angle,
     rotation_z,
@@ -136,7 +149,7 @@ class SortingRollExpertTest(unittest.TestCase):
     def test_release_geometry_uses_validated_touch_and_withdrawal_steps(self):
         self.assertAlmostEqual(ARM_RETRACT_M, 0.082)
         self.assertAlmostEqual(RELEASE_ROLL_Z, 1.128)
-        self.assertAlmostEqual(RELEASE_APPROACH_Y_BIAS_M, 0.008)
+        self.assertAlmostEqual(RELEASE_APPROACH_Y_BIAS_M, 0.0)
         self.assertAlmostEqual(
             RELEASE_PRE_TOUCH_X_M - float(TARGET_CENTER[0]),
             0.0025,
@@ -152,14 +165,15 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertAlmostEqual(RELEASE_WRIST_LEVEL_DEG, 4.0)
         self.assertEqual(
             RELEASE_TIP_REGRASP_X_M,
-            {"l": -0.035, "r": -0.034},
+            {"l": -0.004, "r": -0.004},
         )
         self.assertAlmostEqual(RELEASE_TIP_REGRASP_STAGE_X_M, 0.750)
         self.assertAlmostEqual(
             RELEASE_PRE_TOUCH_X_M - RELEASE_TIP_REGRASP_STAGE_X_M,
             0.035,
         )
-        self.assertAlmostEqual(RELEASE_INSERT_STEP_M, 0.002)
+        self.assertAlmostEqual(RELEASE_INSERT_STEP_M, 0.008)
+        self.assertLessEqual(RELEASE_INSERT_STEP_M, 0.010)
         self.assertAlmostEqual(RELEASE_OPEN_RAISE_M, 0.004)
         self.assertAlmostEqual(RELEASE_PAD_SLIDING_FRICTION, 1.0)
         self.assertEqual(RELEASE_FRICTION_SETTLE_TICKS, 12)
@@ -185,9 +199,52 @@ class SortingRollExpertTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             cosine_steps(1.0, 0.0)
 
-    def test_v2_target_is_sourced_from_scene_contract(self):
-        self.assertEqual(TASK_VERSION, "sorting_roll_v2")
+    def test_v3_target_is_sourced_from_scene_contract(self):
+        self.assertEqual(TASK_VERSION, "sorting_roll_v3")
         np.testing.assert_allclose(TARGET_CENTER, SCENE_TARGET_CENTER)
+
+    def test_v3_records_policy_and_review_robot_cameras(self):
+        self.assertEqual(
+            POLICY_CAMERAS,
+            ("stereo_left", "stereo_right", "waist_front"),
+        )
+        self.assertEqual(REVIEW_ONLY_CAMERAS, ("hand_left", "hand_right"))
+        self.assertEqual(
+            RECORDED_CAMERAS,
+            POLICY_CAMERAS + REVIEW_ONLY_CAMERAS,
+        )
+
+    def test_supported_pick_targets_flat_hands_without_loaded_rotation(self):
+        self.assertAlmostEqual(FLAT_PICK_TARGET_ALONG_M, 0.160)
+        self.assertAlmostEqual(FLAT_PICK_TIP_BIAS_Y_M, 0.034)
+        self.assertGreater(FLAT_PICK_PREGRASP_CLEARANCE_Y_M, 0.05)
+        self.assertEqual(
+            (
+                FLAT_PICK_CLEARANCE_X_M,
+                FLAT_PICK_CLEARANCE_Y_M,
+                FLAT_PICK_CLEARANCE_Z_M,
+                FLAT_PICK_HIGH_Z_M,
+            ),
+            (0.320, 0.240, 0.240, 0.060),
+        )
+        target_pad = np.array([0.16, -0.93, 1.112])
+        rotation = flatten_target_rotation(
+            grasp_target_rotation(np.diag([-1.0, 1.0, -1.0]), 1.0),
+            1.0,
+        )
+        local_pad = np.array([0.0, 0.0, 0.0955])
+        mount = mount_position_for_pad_target(
+            target_pad,
+            rotation,
+            local_pad,
+        )
+        np.testing.assert_allclose(
+            mount + rotation @ local_pad,
+            target_pad,
+            atol=1e-12,
+        )
+        self.assertGreater(BASE_MAX_SPEED, 0.20)
+        self.assertGreater(BASE_MAX_YAW_RATE, 0.40)
 
     def test_side_flat_rotation_makes_closing_axis_vertical(self):
         fingers_down = np.diag([-1.0, 1.0, -1.0])
@@ -386,24 +443,28 @@ class SortingRollExpertTest(unittest.TestCase):
         source = (
             COLLECTION_DIR / "sorting_roll_expert.py"
         ).read_text(encoding="utf-8")
+        execute_source = source[
+            source.index("    def execute(self):"):
+            source.index("    def encode_frame_video")
+        ]
         phases = (
             "navigate_to_table_observation",
             "observe_roll",
-            "raise_arms_after_observation",
-            "lower_and_grasp",
-            "raise_for_full_hand_flattening",
-            "flatten_hands",
+            "approach_table_with_arms_down",
+            "prepare_flat_grasp_after_observation",
+            "horizontal_pregrasp",
+            "horizontal_approach_and_grasp",
+            "lift_flat_from_pickup_support",
+            "clear_table",
+            "rotate_to_shelf",
+            "navigate_to_shelf_stage",
             "align_slot_axis_above_shelf",
             "realign_shelf_stage_after_axis",
             "lower_near_top_slot",
             "level_release_support_surfaces",
-            "align_slot_axis_before_tip_regrasp_stage",
-            "recenter_before_tip_regrasp_stage",
-            "verify_slot_axis_before_tip_regrasp_stage",
-            "slow_forward_to_tip_regrasp_stage",
-            "regrasp_at_release_tips",
-            "fine_align_slot_axis_with_arms",
-            "recenter_low_stage_after_axis_alignment",
+            "position_grip_at_release_edge",
+            "fine_align_slot_axis_before_insert",
+            "recenter_low_stage_before_insert",
             "verify_slot_axis_before_insert",
             "slow_forward_insert",
             "gentle_touch_shelf",
@@ -412,8 +473,18 @@ class SortingRollExpertTest(unittest.TestCase):
             "retract_arms_after_release",
             "terminal_success_hold",
         )
-        offsets = [source.index(f'self.phase("{phase}")') for phase in phases]
+        offsets = [
+            execute_source.index(f'self.phase("{phase}")')
+            for phase in phases
+        ]
         self.assertEqual(offsets, sorted(offsets))
+        self.assertIn(
+            '"arms_unchanged_through_table_approach"',
+            execute_source,
+        )
+        self.assertNotIn('self.phase("flatten_hands")', execute_source)
+        self.assertNotIn('self.phase("regrasp_at_release_tips")', execute_source)
+        self.assertIn("self.regrasp_at_release_tips()", execute_source)
 
     def test_low_pad_friction_starts_only_after_gentle_touch(self):
         source = (
