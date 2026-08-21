@@ -18,15 +18,15 @@ from sorting_roll_task import (
 
 
 class SortingRollTaskTest(unittest.TestCase):
-    def test_roll_fits_simulated_slot_but_physical_nominal_is_line_to_line(self):
+    def test_roll_and_visual_geometry_have_positive_slot_clearance(self):
         report = fit_report()
         self.assertTrue(report["simulation_fits"], report)
-        self.assertAlmostEqual(report["length_clearance_total_m"], 0.100)
-        self.assertAlmostEqual(report["length_clearance_each_end_m"], 0.050)
-        self.assertAlmostEqual(report["simulated_slot_clearance_m"], 0.001)
-        self.assertAlmostEqual(report["physical_nominal_slot_clearance_m"], 0.0)
+        self.assertAlmostEqual(report["length_clearance_total_m"], 0.070)
+        self.assertAlmostEqual(report["length_clearance_each_end_m"], 0.035)
+        self.assertAlmostEqual(report["simulated_slot_clearance_m"], 0.006)
+        self.assertAlmostEqual(report["physical_nominal_slot_clearance_m"], 0.005)
         self.assertAlmostEqual(report["middle_bar_vertical_clearance_m"], 0.095)
-        self.assertFalse(
+        self.assertTrue(
             report["checks"]["physical_nominal_has_positive_slot_clearance"]
         )
 

@@ -62,69 +62,69 @@
           friction="1.0 0.01 0.001"/>
 
     <!-- Shelf visual: raw X=front width, Y=height, Z=depth. Raw +Z faces the robot. -->
-    <body name="sorting_shelf" pos="1.2 0 0.7" quat="0.5 0.5 -0.5 -0.5">
+    <body name="sorting_shelf" pos="1.0 0 0.7" quat="0.5 0.5 -0.5 -0.5">
       <geom name="sorting_shelf_visual" type="mesh" mesh="sorting_shelf_mesh"
             material="sorting_shelf_material" contype="0" conaffinity="0"
             group="1" density="0"/>
     </body>
 
     <!-- Static shelf collision: four posts and four tier bottoms. -->
-    <geom name="shelf_post_front_left_col" type="box" pos="1.025 0.300 0.700"
+    <geom name="shelf_post_front_left_col" type="box" pos="0.825 0.300 0.700"
           size="0.015 0.015 0.700" group="3" contype="1" conaffinity="3"/>
-    <geom name="shelf_post_front_right_col" type="box" pos="1.025 -0.300 0.700"
+    <geom name="shelf_post_front_right_col" type="box" pos="0.825 -0.300 0.700"
           size="0.015 0.015 0.700" group="3" contype="1" conaffinity="3"/>
-    <geom name="shelf_post_rear_left_col" type="box" pos="1.375 0.300 0.700"
+    <geom name="shelf_post_rear_left_col" type="box" pos="1.175 0.300 0.700"
           size="0.015 0.015 0.700" group="3" contype="1" conaffinity="3"/>
-    <geom name="shelf_post_rear_right_col" type="box" pos="1.375 -0.300 0.700"
+    <geom name="shelf_post_rear_right_col" type="box" pos="1.175 -0.300 0.700"
           size="0.015 0.015 0.700" group="3" contype="1" conaffinity="3"/>
-    <geom name="shelf_tier1_col" type="box" pos="1.200 0 0.175"
+    <geom name="shelf_tier1_col" type="box" pos="1.000 0 0.175"
           size="0.190 0.300 0.0075" group="3" contype="1" conaffinity="3"
           friction="1.1 0.01 0.001"/>
-    <geom name="shelf_tier2_col" type="box" pos="1.200 0 0.445"
+    <geom name="shelf_tier2_col" type="box" pos="1.000 0 0.445"
           size="0.190 0.300 0.0075" group="3" contype="1" conaffinity="3"
           friction="1.1 0.01 0.001"/>
-    <geom name="shelf_tier3_col" type="box" pos="1.200 0 0.715"
+    <geom name="shelf_tier3_col" type="box" pos="1.000 0 0.715"
           size="0.190 0.300 0.0075" group="3" contype="1" conaffinity="3"
           friction="1.1 0.01 0.001"/>
-    <geom name="shelf_tier4_col" type="box" pos="1.205 0 0.995"
+    <geom name="shelf_tier4_col" type="box" pos="1.005 0 0.995"
           size="0.195 0.300 0.005" group="3" contype="1" conaffinity="3"
           friction="1.2 0.02 0.001"/>
 
-    <!-- Top-tier 25 mm slot. The rigid roll collider is 24 mm in diameter. -->
-    <geom name="target_slot_floor_col" type="box" pos="0.9825 0 0.995"
-          size="0.0125 0.300 0.005" group="3" contype="1" conaffinity="3"
+    <!-- Top-tier 30 mm slot. The 25 mm visual roll has 2.5 mm clearance per side. -->
+    <geom name="target_slot_floor_col" type="box" pos="0.7825 0 0.995"
+          size="0.0150 0.300 0.005" group="3" contype="1" conaffinity="3"
           friction="1.35 0.02 0.001"/>
-    <geom name="target_slot_front_guard_col" type="box" pos="0.9625 0 1.025"
+    <geom name="target_slot_front_guard_col" type="box" pos="0.7600 0 1.025"
           size="0.0075 0.300 0.025" group="3" contype="1" conaffinity="3"
           friction="1.2 0.02 0.001"/>
-    <geom name="target_slot_back_guard_col" type="box" pos="1.0025 0 1.025"
+    <geom name="target_slot_back_guard_col" type="box" pos="0.8050 0 1.025"
           size="0.0075 0.300 0.025" group="3" contype="1" conaffinity="3"
           friction="1.2 0.02 0.001"/>
-    <geom name="target_middle_bar_col" type="box" pos="1.010 0 1.130"
+    <geom name="target_middle_bar_col" type="box" pos="0.810 0 1.130"
           size="0.0125 0.300 0.010" group="3" contype="1" conaffinity="3"/>
-    <geom name="target_top_bar_col" type="box" pos="1.010 0 1.190"
+    <geom name="target_top_bar_col" type="box" pos="0.810 0 1.190"
           size="0.0125 0.300 0.010" group="3" contype="1" conaffinity="3"/>
-    <site name="sorting_roll_target" type="box" pos="0.9825 0 1.0125"
+    <site name="sorting_roll_target" type="box" pos="0.7825 0 1.0125"
           size="0.018 0.255 0.018" rgba="0.10 0.85 0.25 0.20" group="4"/>
 
     <!-- Table visual: 0.60 m along world X, 0.52 m along world Y, 1.00 m high. -->
     <!-- Rotated 180 deg about world Z, around the table-top center. -->
-    <body name="sorting_table" pos="0 -1.575 0.5" quat="0.707106781 0.707106781 0 0">
+    <body name="sorting_table" pos="0 -1.275 0.5" quat="0.707106781 0.707106781 0 0">
       <geom name="sorting_table_visual" type="mesh" mesh="sorting_table_mesh"
             material="sorting_table_material" contype="0" conaffinity="0"
             group="1" density="0"/>
     </body>
-    <geom name="table_top_col" type="box" pos="0 -1.575 0.980"
+    <geom name="table_top_col" type="box" pos="0 -1.275 0.980"
           size="0.300 0.260 0.020" group="3" contype="1" conaffinity="3"
           friction="1.1 0.02 0.001"/>
-    <geom name="table_pedestal_col" type="box" pos="-0.120 -1.575 0.480"
+    <geom name="table_pedestal_col" type="box" pos="-0.120 -1.275 0.480"
           size="0.045 0.045 0.480" group="3" contype="1" conaffinity="3"/>
-    <geom name="table_base_col" type="box" pos="-0.120 -1.575 0.035"
+    <geom name="table_base_col" type="box" pos="-0.120 -1.275 0.035"
           size="0.240 0.205 0.035" group="3" contype="1" conaffinity="3"/>
 
     <!-- Manipuland: visual mesh plus a stable, low-cost rigid-cylinder collider. -->
     <!-- One third of the table depth inward from the robot-side edge. -->
-    <body name="sorting_roll" pos="0 -1.488333333 1.0135">
+    <body name="sorting_roll" pos="0 -1.188333333 1.0135">
       <freejoint name="sorting_roll_free"/>
       <geom name="sorting_roll_visual" type="mesh" mesh="sorting_roll_mesh"
             material="sorting_roll_material" contype="0" conaffinity="0"
@@ -135,4 +135,5 @@
             solref="0.004 1" solimp="0.95 0.995 0.001"/>
     </body>
   </worldbody>
+
 </mujoco>

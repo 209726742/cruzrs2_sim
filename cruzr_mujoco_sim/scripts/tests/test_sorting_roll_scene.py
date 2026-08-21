@@ -18,7 +18,7 @@ class SortingRollSceneTest(unittest.TestCase):
     def test_layout_contract(self):
         report = scene.layout_report()
         self.assertTrue(all(report["checks"].values()), report)
-        self.assertAlmostEqual(report["edge_gap_m"], 1.0)
+        self.assertAlmostEqual(report["edge_gap_m"], 0.7)
         self.assertAlmostEqual(report["table_yaw_deg"], 180.0)
         self.assertAlmostEqual(
             report["roll_depth_from_robot_side_m"], 0.52 / 3.0
@@ -130,14 +130,27 @@ class SortingRollSceneTest(unittest.TestCase):
             back_pos[0] - back_size[0]
             - (front_pos[0] + front_size[0])
         )
+        post_left = geoms["shelf_post_front_left_col"]
+        post_right = geoms["shelf_post_front_right_col"]
+        left_pos = np.fromstring(post_left["pos"], sep=" ")
+        left_size = np.fromstring(post_left["size"], sep=" ")
+        right_pos = np.fromstring(post_right["pos"], sep=" ")
+        right_size = np.fromstring(post_right["size"], sep=" ")
+        shelf_inner_half_width = left_pos[1] - left_size[1]
+        self.assertAlmostEqual(shelf_inner_half_width, 0.285)
+        self.assertAlmostEqual(
+            right_pos[1] + right_size[1], -shelf_inner_half_width
+        )
         top_height = top_pos[2] + top_size[2]
         self.assertAlmostEqual(floor_top, 1.0)
         self.assertAlmostEqual(2.0 * front_size[2], 0.05)
-        self.assertAlmostEqual(slot_width, 0.025)
+        self.assertAlmostEqual(slot_width, 0.030)
         self.assertAlmostEqual(middle_pos[2] - floor_top, 0.13)
         self.assertAlmostEqual(top_height, 1.2)
         self.assertAlmostEqual(scene.TARGET_CENTER[2], 1.0125)
-
+        self.assertAlmostEqual(floor_pos[0], scene.TARGET_CENTER[0])
+        self.assertAlmostEqual(front_pos[0] + 0.0225, scene.TARGET_CENTER[0])
+        self.assertAlmostEqual(back_pos[0] - 0.0225, scene.TARGET_CENTER[0])
 
 if __name__ == "__main__":
     unittest.main()

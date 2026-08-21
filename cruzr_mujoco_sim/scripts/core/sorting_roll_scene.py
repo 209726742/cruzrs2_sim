@@ -17,8 +17,8 @@ SORTING_ROOT = WORKSPACE_ROOT / "Sorting_Roll"
 TEMPLATE_PATH = SORTING_ROOT / "sorting_roll_scene.xml"
 SCENE_PATH = PACKAGE_ROOT / "assets" / "sorting_roll_scene.xml"
 
-SHELF_BOUNDS = np.array([[1.0, -0.315, 0.0], [1.4, 0.315, 1.4]])
-TABLE_BOUNDS = np.array([[-0.3, -1.835, 0.0], [0.3, -1.315, 1.0]])
+SHELF_BOUNDS = np.array([[0.8, -0.315, 0.0], [1.2, 0.315, 1.4]])
+TABLE_BOUNDS = np.array([[-0.3, -1.535, 0.0], [0.3, -1.015, 1.0]])
 TABLE_YAW_DEG = 180.0
 ROLL_DEPTH_FRACTION_FROM_ROBOT_SIDE = 1.0 / 3.0
 ROLL_SIZE = np.array([0.5, 0.025, 0.025])
@@ -29,9 +29,9 @@ ROLL_SPAWN = np.array([
     - TABLE_DEPTH_M * ROLL_DEPTH_FRACTION_FROM_ROBOT_SIDE,
     1.0135,
 ])
-TARGET_CENTER = np.array([0.9825, 0.0, 1.0125])
+TARGET_CENTER = np.array([0.7825, 0.0, 1.0125])
 TARGET_AXIS = np.array([0.0, 1.0, 0.0])
-EXPECTED_EDGE_GAP_M = 1.0
+EXPECTED_EDGE_GAP_M = 0.7
 
 
 def required_assets():
@@ -69,7 +69,7 @@ def layout_report():
         ),
         "table_is_robot_right": bool(TABLE_BOUNDS[1, 1] < 0.0),
         "shelf_is_robot_front": bool(SHELF_BOUNDS[0, 0] > 0.0),
-        "edge_gap_is_1m": bool(abs(edge_gap - EXPECTED_EDGE_GAP_M) < 1e-9),
+        "edge_gap_is_0p70m": bool(abs(edge_gap - EXPECTED_EDGE_GAP_M) < 1e-9),
         "table_yaw_is_180deg": bool(abs(TABLE_YAW_DEG - 180.0) < 1e-9),
         "roll_at_robot_side_third": bool(
             abs(
@@ -274,7 +274,7 @@ def main(argv=None):
             model,
             target_data,
             target_preview,
-            lookat=(1.10, 0.0, 1.03),
+            lookat=(0.90, 0.0, 1.03),
             distance=1.15,
             azimuth=42,
             elevation=-12,

@@ -11,8 +11,8 @@ from sorting_roll_scene import TARGET_AXIS, TARGET_CENTER
 ROLL_LENGTH_M = 0.5
 ROLL_VISUAL_DIAMETER_M = 0.025
 ROLL_COLLISION_RADIUS_M = 0.012
-SHELF_INNER_HALF_WIDTH_M = 0.300
-SLOT_CLEAR_WIDTH_M = 0.025
+SHELF_INNER_HALF_WIDTH_M = 0.285
+SLOT_CLEAR_WIDTH_M = 0.030
 SLOT_FLOOR_TO_MIDDLE_BAR_LOWER_EDGE_M = 0.120
 TARGET_X_TOLERANCE_M = 0.003
 TARGET_Y_TOLERANCE_M = 0.055
@@ -136,6 +136,14 @@ def evaluate_placement(model, data):
         * math.sqrt(max(0.0, 1.0 - float(roll_axis[1]) ** 2))
     )
 
+    endpoint_margin_m = {
+        "negative_y": float(
+            center[1] - half_y_span + SHELF_INNER_HALF_WIDTH_M
+        ),
+        "positive_y": float(
+            SHELF_INNER_HALF_WIDTH_M - center[1] - half_y_span
+        ),
+    }
     slot_support = _contact_force(
         mujoco, model, data, {roll_geom}, {slot_floor}
     )
@@ -155,8 +163,8 @@ def evaluate_placement(model, data):
             and abs(center[2] - TARGET_CENTER[2]) <= TARGET_Z_TOLERANCE_M
         ),
         "fully_inside_shelf_width": bool(
-            center[1] - half_y_span >= -SHELF_INNER_HALF_WIDTH_M
-            and center[1] + half_y_span <= SHELF_INNER_HALF_WIDTH_M
+            endpoint_margin_m["negative_y"] >= 0.0
+            and endpoint_margin_m["positive_y"] >= 0.0
         ),
         "axis_aligned_with_slot": bool(
             alignment_degrees <= TARGET_AXIS_TOLERANCE_DEG
@@ -173,6 +181,10 @@ def evaluate_placement(model, data):
         "axis_error_deg": round(alignment_degrees, 4),
         "half_y_span_m": round(half_y_span, 6),
         "slot_support_force_n": round(slot_support, 4),
+        "endpoint_margin_m": {
+            side: round(margin, 6)
+            for side, margin in endpoint_margin_m.items()
+        },
         "table_support_force_n": round(table_support, 4),
         "gripper_contact_force_n": round(gripper_force, 4),
         "linear_speed_m_s": round(linear_speed, 6),
