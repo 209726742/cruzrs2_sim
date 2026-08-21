@@ -22,6 +22,8 @@ from cruzr_s2_sdk_contract import (  # noqa: E402
     ARM_RATED_DELTA_RAD_AT_DATASET_FPS,
     ARM_RATED_SPEED_RAD_S,
     SDK_CAMERAS,
+    SDK_DOCUMENTED_RGB_CAMERA_TOPICS,
+    SDK_WRIST_CAMERAS,
     SDK_COMMAND_DELTA_RAD_AT_DATASET_FPS,
     SDK_COMMAND_POSITION_MARGIN_RAD,
     SDK_COMMAND_SPEED_FRACTION_OF_RATED,
@@ -71,6 +73,21 @@ class CruzrS2SdkContractTest(unittest.TestCase):
         self.assertEqual(
             SDK_CAMERAS, ("stereo_left", "waist_front", "chassis_front")
         )
+        self.assertEqual(summary["documented_rgb_camera_count"], 6)
+        self.assertEqual(
+            set(summary["documented_rgb_camera_topics"]),
+            {
+                "chassis_front",
+                "waist_front",
+                "fisheye_left",
+                "fisheye_right",
+                "stereo_left",
+                "stereo_right",
+            },
+        )
+        self.assertEqual(summary["wrist_cameras"], [])
+        self.assertEqual(SDK_WRIST_CAMERAS, ())
+        self.assertEqual(len(SDK_DOCUMENTED_RGB_CAMERA_TOPICS), 6)
         self.assertEqual(
             summary["task_head_pose_rad"], SDK_TASK_HEAD_POSE_RAD
         )

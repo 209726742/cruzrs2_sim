@@ -20,6 +20,7 @@ TARGET_Z_TOLERANCE_M = 0.012
 TARGET_AXIS_TOLERANCE_DEG = 10.0
 SUPPORT_FORCE_MIN_N = 0.5
 RELEASE_FORCE_MAX_N = 0.2
+SLOT_FLOOR_GAP_TOLERANCE_M = 0.002
 LINEAR_SPEED_MAX_M_S = 0.02
 ANGULAR_SPEED_MAX_RAD_S = 0.10
 REQUIRED_STABLE_SECONDS = 0.5
@@ -29,6 +30,7 @@ INSTANTANEOUS_CHECKS = (
     "fully_inside_shelf_width",
     "axis_aligned_with_slot",
     "supported_by_slot_floor",
+    "resting_on_slot_floor_geometry",
     "released_from_both_grippers",
     "not_supported_by_table",
     "low_linear_speed",
@@ -94,15 +96,36 @@ def _named_id(mujoco, model, object_type, name):
     return object_id
 
 
-def _contact_force(mujoco, model, data, first, second):
+def _contact_report(mujoco, model, data, first, second):
     force = np.zeros(6, dtype=float)
     total = 0.0
+    positions = []
+    distances = []
     for index in range(data.ncon):
         pair = {int(data.contact[index].geom1), int(data.contact[index].geom2)}
         if pair & first and pair & second:
             mujoco.mj_contactForce(model, data, index, force)
             total += abs(float(force[0]))
-    return total
+            positions.append(
+                np.round(data.contact[index].pos, 6).tolist()
+            )
+            distances.append(round(float(data.contact[index].dist), 7))
+    return {
+        "force_n": total,
+        "count": len(positions),
+        "positions_m": positions,
+        "distances_m": distances,
+    }
+
+
+def _contact_force(mujoco, model, data, first, second):
+    return _contact_report(
+        mujoco,
+        model,
+        data,
+        first,
+        second,
+    )["force_n"]
 
 
 def evaluate_placement(model, data):
@@ -135,6 +158,21 @@ def evaluate_placement(model, data):
         + ROLL_COLLISION_RADIUS_M
         * math.sqrt(max(0.0, 1.0 - float(roll_axis[1]) ** 2))
     )
+    half_z_span = (
+        0.5 * ROLL_LENGTH_M * abs(float(roll_axis[2]))
+        + ROLL_COLLISION_RADIUS_M
+        * math.sqrt(max(0.0, 1.0 - float(roll_axis[2]) ** 2))
+    )
+    slot_floor_rotation = data.geom_xmat[slot_floor].reshape(3, 3)
+    slot_floor_half_z = float(
+        np.abs(slot_floor_rotation[2])
+        @ model.geom_size[slot_floor, :3]
+    )
+    slot_floor_top_z = float(
+        data.geom_xpos[slot_floor, 2] + slot_floor_half_z
+    )
+    roll_bottom_z = float(center[2] - half_z_span)
+    slot_floor_gap = roll_bottom_z - slot_floor_top_z
 
     endpoint_margin_m = {
         "negative_y": float(
@@ -144,9 +182,10 @@ def evaluate_placement(model, data):
             SHELF_INNER_HALF_WIDTH_M - center[1] - half_y_span
         ),
     }
-    slot_support = _contact_force(
+    slot_contact = _contact_report(
         mujoco, model, data, {roll_geom}, {slot_floor}
     )
+    slot_support = slot_contact["force_n"]
     table_support = _contact_force(
         mujoco, model, data, {roll_geom}, {table_top}
     )
@@ -170,6 +209,10 @@ def evaluate_placement(model, data):
             alignment_degrees <= TARGET_AXIS_TOLERANCE_DEG
         ),
         "supported_by_slot_floor": bool(slot_support >= SUPPORT_FORCE_MIN_N),
+        "resting_on_slot_floor_geometry": bool(
+            slot_contact["count"] > 0
+            and abs(slot_floor_gap) <= SLOT_FLOOR_GAP_TOLERANCE_M
+        ),
         "released_from_both_grippers": bool(gripper_force <= RELEASE_FORCE_MAX_N),
         "not_supported_by_table": bool(table_support < SUPPORT_FORCE_MIN_N),
         "low_linear_speed": bool(linear_speed <= LINEAR_SPEED_MAX_M_S),
@@ -181,6 +224,10 @@ def evaluate_placement(model, data):
         "axis_error_deg": round(alignment_degrees, 4),
         "half_y_span_m": round(half_y_span, 6),
         "slot_support_force_n": round(slot_support, 4),
+        "slot_floor_contact_count": slot_contact["count"],
+        "slot_floor_contact_positions_m": slot_contact["positions_m"],
+        "slot_floor_contact_distances_m": slot_contact["distances_m"],
+        "roll_bottom_to_slot_floor_gap_m": round(slot_floor_gap, 7),
         "endpoint_margin_m": {
             side: round(margin, 6)
             for side, margin in endpoint_margin_m.items()

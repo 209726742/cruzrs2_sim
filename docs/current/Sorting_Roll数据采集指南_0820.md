@@ -6,7 +6,7 @@
 
 ## 先说结论
 
-仓库的通用人工入口可以生成并检查 Sorting Roll 场景、进行人工遥操作，并以 30 FPS 录制五路相机、机器人状态、动作和底盘数据；但该入口的“录制”和 Sorting Roll 成功判断仍未接通，因此只适合采集 **pilot 原始回合**，不能直接生成正式训练数据：
+仓库的通用人工入口可以生成并检查 Sorting Roll 场景、进行人工遥操作，并按 `REC_CAMS` 以 30 FPS 录制相机、机器人状态、动作和底盘数据；当前 pilot 推荐只录四路已有真机 SDK 对应的仿真相机 `stereo_left / stereo_right / waist_front / chassis_front`。但该入口的“录制”和 Sorting Roll 成功判断仍未接通，因此只适合采集 **pilot 原始回合**，不能直接生成正式训练数据：
 
 - `cruzr_teleop.py` 会把 `meta.json.task` 固定写成 `transport_carton_cruzr`；
 - 按 Enter 会直接写入 `success=true`，不会调用 `sorting_roll_task.py`；
@@ -14,7 +14,7 @@
 - `scripts/collection/` 下现有验收、批采和 LeRobot 构建脚本属于 `shelf_e2e` 双物料任务，不能直接用于 Sorting Roll；
 - 棒子质量仍使用临时值 `0.25 kg`，正式动力学采集前应替换为实测值。
 
-现已新增单回合评审专家 `scripts/collection/sorting_roll_expert.py`：它录制三路策略相机、棒子逐帧状态和独立第三人称 MP4，并直接调用 `sorting_roll_task.py` 完成物理成功锁存。首个物理成功回合 `dev017` 已完成人工评审，但动作语义未获批准；当前正在开发第二版动作，不得将 `dev017` 或中间调试回合用于训练。Sorting Roll 专用 validator、LeRobot 构建入口、reset/randomization 和多 seed readiness 尚未完成。
+现已新增单回合评审专家 `scripts/collection/sorting_roll_expert.py`：`sorting_roll_v4` 录制三路策略相机、右目诊断相机、棒子逐帧状态、全景第三视角和槽位物理近景，并直接调用 `sorting_roll_task.py` 完成物理成功锁存。物理成功回合 `dev063` 已完成并保持 `training_eligible=false`，当前停在人工视频评审点；在用户确认前不启动 20-seed 或批量采集。Sorting Roll 专用 validator、LeRobot 构建入口、reset/randomization 和多 seed readiness 尚未完成。
 
 若视频获人工批准，再补齐“正式采集前必须完成的开发”并启动批量采集。若目标是在 48 小时内获得仿真 canary 数据，采用“单卡开发与验收、四卡短时批采、单卡补采与收尾”的成本敏感方案；不要从开发阶段就租用 4 卡或 8 卡。
 
@@ -158,6 +158,17 @@
 - 2026-08-21：tmux 六路低清回合 `dev062` 与无渲染快测一致并完整成功，`result.json.success=true`、`meta.json.success=true`，同时保持 `training_eligible=false`。共 `2814` 帧、`93.800 s`，比 `dev058` 的 `209.23 s` 缩短 `55.2%`，通过 `<120 s` 门但尚未达到 `≤60 s` 二级目标。释放前左右端余量为 `34.91/34.98 mm`；6 步完全脱指后棒子在顶层槽底稳定，回撤后最终棒心 `[0.780352, 0.015711, 1.012168] m`、棒轴误差 `0.2023°`、左右端余量 `50.67/19.25 mm`、槽底支撑力 `2.4513 N`、夹爪接触 `0 N`，完整成功判据稳定 `0.5 s`。
 - `dev062` 已生成第三视角、左右双目、腰部、左右手相机和五路拼接预览共 7 个 MP4；全部为 30 fps、2814 帧、93.800 s，七路均完整解码无错。第三视角可同时观察桌子、机器人和货架，能连续看到抓取、运输、下降、轻触、落槽和回撤；左右双目可正面观察水平夹取和顶层放置，右手相机提供近景。腰部视角在桌前会被桌板遮挡，左手视角大部分画面被自身手臂遮挡；这两路保留作诊断，不建议单独用于动作判断。当前停在人工视频评审点，不启动 20-seed 或批量采集。
 - `dev062` 里程碑验证：完整仓库回归测试 `125/125` 通过，修改的 Python 文件通过 `py_compile`，`git diff --check` 通过；`bash Sorting_Roll/run_scene.sh check` 通过场景布局、托架稳定、初始非成功状态和目标位连续 `0.5 s` 成功正例。
+- 2026-08-21 用户对 `dev062` 提出新一轮反馈后，先完成尺寸与相机事实审计，暂不凭画面直接修改物理尺寸。棒长为 `0.500 m`，顶部槽在两侧立柱内的有效宽度为 `0.570 m`，棒长占比为 `87.72%`，总余量 `70 mm`、理想居中时每端 `35 mm`，已经位于用户要求的 `80%–90%` 范围内；截图里的“棒比架宽”属于透视、双臂和立柱遮挡造成的视觉歧义。后续继续保留端点物理门，并增加更容易看清两端和槽底接触的验收视角，不缩短棒长。
+- 原始《Cruzr S2 优必选 SDK 二次开发文档 6.24》已重新核对。SDK 明确列出腰前 Gemini 2L、底盘前 Gemini 2L、头前双目左/右和头部鱼眼左/右，共 `6` 个 RGB 成像端点；RGBD 的深度、混合图和双目的深度/点云是附加数据流，不应再按“相机路数”重复计数。SDK 没有左/右腕部或手部相机。因此 `dev062` 的五路机器人视频不是“五路真机相机”：`stereo_left / stereo_right / waist_front` 有真机对应，`hand_left / hand_right` 只是仿真诊断相机，而且视角遮挡严重。下一版将删除这两路腕部假输入，改为记录当前模型已有的四路真机对齐 RGB：`stereo_left / stereo_right / waist_front / chassis_front`；正式三路策略输入继续按 SDK 对齐契约使用 `stereo_left / waist_front / chassis_front`，右目只作冗余诊断。鱼眼相机尚未建模，不能伪造为已经支持。
+- 当前 SDK 事实也意味着抓取逻辑不能写成“等待手部相机定位”：CRUZR S2 真机没有该传感器。下一版将在机器人到达桌前且双臂仍保持初始下垂姿态后，显式保留头部双目近距定位窗口；定位完成后再抬手，并沿经碰撞采样验证的直接水平预抓路径靠近棒子，删除 `dev062` 中先转成竖直抓取姿态、再转平的多余阶段。
+- 本轮恢复现场时没有发现存活的 `sorting_roll_fast` tmux 会话，也没有后台专家进程，因此尚未向用户确认可以断开 SSH。完成路径修改和静态/无渲染安全验证后，必须重新创建 tmux、启动新候选回合，并同时确认会话、PID、日志增长和输出帧增长后，才报告后台已安全运行。
+- 直接平抓路径已完成两轮离线搜索。第一类“自然姿态原地抬高后再原地打平”在右臂全部超过 IK 可达性，因此否决；第二类让抬升与打平同时完成，共找到 `69` 组左右臂共同无碰撞候选。最终选择对称净空点 `X=±0.340 m`、棒心朝机器人侧 `0.300 m`、棒心上方 `0.080 m`，左右共同最小关节限位余量为 `0.144821 rad`。无渲染真实控制循环已通过近距双目定位、右/左直接平手净空、水平预抓、夹取和抬升：最大稳态跟踪误差约 `0.0060 rad`，移动臂接触为空，抓取力约 `19.80/20.72 N`，棒子抬离托架 `85.23 mm`，前半程全部门通过。该路径不再包含竖直抓取目标或竖直到水平的二次变姿。
+- `sorting_roll_v4` 相机与验收代码已落地并由 `dev063` 完整回合确认。机器人视频改为四路有真机对应的 `stereo_left / stereo_right / waist_front / chassis_front`，其中策略三路严格使用 `stereo_left / waist_front / chassis_front`，右目仅作诊断；左右仿真腕相机不再录制。灯光使用已经过同终局状态实图比较的低曝光参数，第三视角距离由 `3.15 m` 拉近到 `2.65 m`。另新增 `sorting_roll_slot_physics_closeup.mp4`：侧面近景只用于验收，隐藏货架视觉网格并显示 group 3 真实碰撞槽，使前送、前后护边、槽底和棒子落底关系可直接观察；它不进入策略输入。
+- 顶部槽成功判定在原有中心、两端、槽底支撑力、完全脱指、速度和 `0.5 s` 稳定门之外，新增棒底到槽底顶面的几何间隙硬门（绝对值不超过 `2 mm` 且必须存在真实槽底接触），并输出槽底接触数量、三维接触位置、接触距离和棒底间隙。慢速前送阶段新增 `forward_insert_motion` 门，要求棒心沿世界 `+X` 至少真实前送 `25 mm`，同时保存起点、终点和毫米行程；因此后续不能再出现“没有前送却通过”的结果。
+- 对称直接平手候选虽通过抓取前半程，但在完整无渲染回合驶向货架后右手仅剩单指腹轻触，`held_shelf_park` 硬门将其拒绝，未保存为成功数据。关节分支比对确认其右臂抬升末态与 `dev062` 稳定运输分支最大相差约 `0.524 rad`。随后对右臂运行 `294` 组小范围 IK/逐段碰撞精筛，得到 `88` 条完整空手路径；正式候选使用左手 `(X,Y,Z)=(0.330,0.310,0.100) m`、右手 `(0.300,0.210,0.250) m` 的直接平手净空。右手只在 IK 数值求解内部使用旧稳定分支种子，机器人不会实际执行该竖手姿态；其抬升末态与成功运输分支最大关节差缩至约 `0.020 rad`。新增定位后平手外廓硬门，聚焦轨迹与 SDK 测试 `37/37` 通过。
+- 2026-08-21：持久化 tmux 会话 `sorting_roll_fast` 已启动 `dev063` 四路真机对齐相机完整录像，Python PID 为 `10981`。启动复核时帧文件总数由 `1688` 增长到 `2434`，日志已通过观察位、桌前停车和全程手臂未变门，进入头部双目近距定位阶段；此时已明确允许断开 SSH。后续必须继续通过双手四指腹运输、至少 `25 mm` 可观测前送、真实槽底接触、棒底—槽底间隙、两端边界、完全脱指和 `0.5 s` 稳定门，才可报告成功。
+- `dev063` 物理执行与视频编码均完整成功。机器人到桌前和双目定位结束前双臂命令与实测均保持不变；定位后两手直接抬到平手净空，平手外廓约 `21.6–21.9 mm`、移动臂零碰撞。抓取与到架停车时左右手均保持双指腹，到架抓力约 `20.45/21.11 N`。棒心真实前送 `34.81 mm` 后以 `1.2836 N` 轻触，释放前左右端余量约 `34.90/34.98 mm`；5 步完全脱指后，槽底有 `2` 个真实接触点，棒底—槽底间隙约 `-0.059 mm`，夹爪接触 `0 N`。双臂回撤 `82.1 mm` 后最终棒轴误差 `0.0757°`、左右端余量约 `49.50/20.47 mm`，连续稳定 `0.5 s`；总仿真时间 `95.283 s`，通过 `<120 s` 门。全景、槽位物理近景、四路机器人相机和四路拼接共 `7` 个 MP4 均为 30 FPS、`2858` 帧、约 `95.267 s`，已全部逐帧解码无错；关键画面抽检确认抬手顺序、平手抓取、运输、前送、落槽和回撤可见。低位 `chassis_front` 在部分阶段黑色背景占比较高且任务主体较小，这是保留 SDK 安装位带来的视野限制，不通过伪造手部相机补偿。
+- `dev063` 最终验收：`result.json.success=true`、`meta.json.success=true`、`error=null`，同时继续保持 `training_eligible=false`。唯一未通过项是明确标为二级优化目标的 `episode_under_one_minute_target`（`95.283 s > 60 s`），不属于物理成功条件；两分钟硬门已通过。完整仓库回归测试 `126/126`、修改文件 `py_compile`、`git diff --check` 和 `bash Sorting_Roll/run_scene.sh check` 全部通过；场景正例同样测得两个槽底接触点及约 `-0.058 mm` 棒底间隙。
 - `dev017` 只保留为失败动作语义的诊断基线，不进入正式数据。
 
 
@@ -173,6 +184,8 @@
 | 棒轴与目标轴夹角 | `≤ 10°`，正反向均接受 |
 | 棒子必须完整位于架子内宽 | 是 |
 | 槽底支撑力 | `≥ 0.5 N` |
+| 棒子与真实槽底碰撞几何必须接触 | 是 |
+| 棒底到槽底顶面的几何间隙绝对值 | `≤ 2 mm` |
 | 双夹爪接触力 | `≤ 0.2 N` |
 | 桌面支撑力 | `< 0.5 N` |
 | 线速度 | `≤ 0.02 m/s` |
@@ -181,12 +194,18 @@
 
 其中“完整位于架子内宽”按四根立柱的真实内侧面 `y=±0.285 m` 判断，并在终局证据中保存棒子正、负 Y 两端的独立余量；任一余量小于 0 即失败。
 
+棒长为 `0.500 m`，架子两侧立柱内的有效宽度为 `0.570 m`，占比 `87.72%`，已经满足要求的 `80%–90%`；理想居中时每端约有 `35 mm` 余量，因此不因透视画面缩短棒子。
+
+SDK 原文列出六个 RGB 成像端点：底盘前 Gemini 2L、腰前 Gemini 2L、头部双目左/右和鱼眼左/右；没有腕部或手部相机。当前模型已对齐其中 `stereo_left / stereo_right / waist_front / chassis_front` 四路，鱼眼尚未建模；策略输入固定为 `stereo_left / waist_front / chassis_front`，`stereo_right` 只作诊断。任何 `hand_left / hand_right` 都只能视为历史仿真诊断视角，不能冒充真机策略输入。
+
 权威实现位于：
 
 - 场景：`Sorting_Roll/sorting_roll_scene.xml`
 - 场景生成与检查：`cruzr_mujoco_sim/scripts/core/sorting_roll_scene.py`
 - 成功判定：`cruzr_mujoco_sim/scripts/core/sorting_roll_task.py`
 - 遥操作与原始录制：`cruzr_mujoco_sim/scripts/core/cruzr_teleop.py`
+- SDK 机器可读契约：`cruzr_mujoco_sim/scripts/core/cruzr_s2_sdk_contract.py`
+- 单回合物理评审专家：`cruzr_mujoco_sim/scripts/collection/sorting_roll_expert.py`
 
 ## 2. 采集前检查
 
@@ -222,7 +241,7 @@ test ! -e "outputs/teleop/$EPISODE_NAME"
 
 CRUZR_EP_SEED=1 \
 REC_PROMPT="Pick up the roll from the table and place it stably in the top shelf slot" \
-REC_CAMS=stereo_left,stereo_right,waist_front,hand_left,hand_right \
+REC_CAMS=stereo_left,stereo_right,waist_front,chassis_front \
 REC_SAVE_RAW_TIMESTAMPS=1 \
 TELEOP_RECORD_GPU=0 \
 TELEOP_RECORD="$EPISODE_NAME" \
@@ -283,8 +302,7 @@ outputs/teleop/sorting_roll_pilot_000001/
 │   ├── stereo_left/frame_000000.jpg
 │   ├── stereo_right/frame_000000.jpg
 │   ├── waist_front/frame_000000.jpg
-│   ├── hand_left/frame_000000.jpg
-│   └── hand_right/frame_000000.jpg
+│   └── chassis_front/frame_000000.jpg
 ├── episode_data.npz
 ├── sdk_timestamps.npz
 └── meta.json
@@ -302,7 +320,7 @@ outputs/teleop/sorting_roll_pilot_000001/
 
 ## 6. 每个 pilot 回合的检查
 
-先检查元数据、数组和五路相机帧数：
+先检查元数据、数组和四路 SDK 对齐相机帧数：
 
 ```bash
 EPISODE_DIR=outputs/teleop/sorting_roll_pilot_000001
@@ -332,7 +350,7 @@ PY
 
 看到 `task: transport_carton_cruzr` 是当前已知限制。不要手改成 Sorting Roll 后就把它当作正式数据；物理成功证据仍然缺失。
 
-可复用任务无关的视频工具生成每路相机和五路拼接预览：
+可复用任务无关的视频工具生成每路相机和四路拼接预览：
 
 ```bash
 envs/mjx/bin/python \
@@ -344,7 +362,7 @@ envs/mjx/bin/python \
 
 视频至少检查：
 
-- 五路相机帧数一致、无黑帧、卡帧、明显曝光或遮挡问题；
+- 四路相机帧数一致、无黑帧、卡帧和明显曝光问题；低位相机的任务遮挡应单独记录；
 - 找棒、抓取、运输、槽位对准和释放阶段在训练相机中可观察；
 - 没有明显穿模、剧烈碰撞、关节抖动或长时间无意义停顿；
 - 动作从统一初始状态开始，结束时包含释放后的稳定观察窗口。
@@ -369,7 +387,7 @@ envs/mjx/bin/python \
 6. 新增 Sorting Roll source validator，拒绝空回合、错误任务版本、错误相机、帧数不一致、非有限数组、失败标签和缺少终局稳定窗的回合。
 7. 新增或参数化 LeRobot 构建器，明确 16D 关节状态与底盘字段如何组成训练 schema，并通过小数据 canary。
 8. 用实测棒子质量替换 `0.25 kg`，重新运行场景、抓取和成功判定测试。
-9. 冻结正式相机组合前，确认仿真相机与计划使用的真机相机一致；不能只因当前录了五路就默认全部进入策略输入。
+9. 冻结正式相机组合前，确认仿真相机与计划使用的真机相机一致；不得把历史仿真手部相机或未建模鱼眼默认加入策略输入。
 
 正式准入顺序建议为：
 
@@ -464,7 +482,7 @@ envs/mjx/bin/python \
 
 ### 降低费用的执行规则
 
-- pilot 阶段保留五路相机用于确定视野；冻结策略输入后，正式批采只录实际需要的三路相机，可比五路减少 40% 图像渲染和写盘。
+- pilot 阶段保留四路已建模的 SDK 对齐相机用于确定视野；冻结策略输入后，正式批采只录三路策略相机，可比四路减少约 25% 图像渲染和写盘。全景与槽位物理近景只按抽检比例生成。
 - 抓取失败、棒子掉落或发生不可恢复碰撞时提前终止，不跑完整超时。
 - 目标 300 个成功回合时，先把最大尝试数限制在 400–450；达到成功数立即全局停止。
 - 采集过程中不为每个回合生成 MP4，只审查全部失败回合和约 10% 成功回合。
@@ -495,7 +513,7 @@ RL_MJX_PY=/path/to/mujoco/python bash Sorting_Roll/run_scene.sh view
 TELEOP_EGL_GPU=0 TELEOP_RECORD_GPU=0 bash Sorting_Roll/run_scene.sh view
 ```
 
-仅做兼容性查看时可回退 CPU viewer；正式五路相机录制仍需要 EGL：
+仅做兼容性查看时可回退 CPU viewer；正式多路相机录制仍需要 EGL：
 
 ```bash
 TELEOP_VIEWER=passive bash Sorting_Roll/run_scene.sh view

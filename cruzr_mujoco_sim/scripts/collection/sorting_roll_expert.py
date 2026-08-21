@@ -18,16 +18,29 @@ WORKSPACE_ROOT = PACKAGE_ROOT.parent
 CORE_DIR = PACKAGE_ROOT / "scripts" / "core"
 if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
+from cruzr_s2_sdk_contract import (
+    SDK_CAMERAS,
+    SDK_DOCUMENTED_RGB_CAMERA_TOPICS,
+    SDK_DOC_REVISION,
+    SDK_WRIST_CAMERAS,
+)
 from sorting_roll_scene import (
     TARGET_AXIS as SCENE_TARGET_AXIS,
     TARGET_CENTER as SCENE_TARGET_CENTER,
 )
 
 
-TASK_VERSION = "sorting_roll_v3"
-POLICY_CAMERAS = ("stereo_left", "stereo_right", "waist_front")
-REVIEW_ONLY_CAMERAS = ("hand_left", "hand_right")
-RECORDED_CAMERAS = POLICY_CAMERAS + REVIEW_ONLY_CAMERAS
+TASK_VERSION = "sorting_roll_v4"
+POLICY_CAMERAS = tuple(SDK_CAMERAS)
+REVIEW_ONLY_CAMERAS = ("stereo_right",)
+RECORDED_CAMERAS = (
+    "stereo_left", "stereo_right", "waist_front", "chassis_front",
+)
+UNMODELED_SDK_RGB_CAMERAS = tuple(
+    camera
+    for camera in SDK_DOCUMENTED_RGB_CAMERA_TOPICS
+    if camera not in RECORDED_CAMERAS
+)
 FLAT_REGRASP_ORDER = (("r", "l", -1.0), ("l", "r", 1.0))
 TARGET_CENTER = np.array(SCENE_TARGET_CENTER, dtype=float, copy=True)
 TARGET_AXIS = np.array(SCENE_TARGET_AXIS, dtype=float, copy=True)
@@ -41,9 +54,11 @@ TABLE_CLEAR_REVERSE_M = 0.22
 FLAT_PICK_TARGET_ALONG_M = 0.160
 FLAT_PICK_TIP_BIAS_Y_M = 0.034
 FLAT_PICK_PREGRASP_CLEARANCE_Y_M = 0.080
-FLAT_PICK_CLEARANCE_X_M = 0.320
-FLAT_PICK_CLEARANCE_Y_M = 0.240
-FLAT_PICK_CLEARANCE_Z_M = 0.240
+FLAT_PICK_CLEARANCE_M = {
+    "l": (0.330, 0.310, 0.100),
+    "r": (0.300, 0.210, 0.250),
+}
+RIGHT_FLAT_PICK_IK_BRANCH_SEED_M = (0.320, 0.240, 0.240)
 FLAT_PICK_HIGH_Z_M = 0.060
 FLAT_PICK_LIFT_M = 0.085
 PRE_RELEASE_Y_TOLERANCE_M = 0.003
@@ -451,25 +466,45 @@ def load_teleop(scene_path, gpu, seed):
     return module
 
 
-def render_third_person(recorder, mujoco, model, data, camera, output_path):
+def render_third_person(
+    recorder,
+    mujoco,
+    model,
+    data,
+    camera,
+    output_path,
+    *,
+    scene_option=None,
+    hidden_geom_ids=(),
+):
     from PIL import Image
 
     recorder._ensure_gl()
     recorder._gl.make_current()
-    mujoco.mjv_updateScene(
-        model,
-        data,
-        recorder._opt,
-        None,
-        camera,
-        mujoco.mjtCatBit.mjCAT_ALL.value,
-        recorder._scn,
-    )
-    mujoco.mjr_render(recorder._vp, recorder._scn, recorder._con)
-    width, height = recorder._vp.width, recorder._vp.height
-    rgb = np.zeros((height, width, 3), dtype=np.uint8)
-    mujoco.mjr_readPixels(rgb, None, recorder._vp, recorder._con)
-    Image.fromarray(np.flipud(rgb)).save(output_path, quality=90)
+    saved_alpha = {
+        int(geom): float(model.geom_rgba[int(geom), 3])
+        for geom in hidden_geom_ids
+    }
+    try:
+        for geom in saved_alpha:
+            model.geom_rgba[geom, 3] = 0.0
+        mujoco.mjv_updateScene(
+            model,
+            data,
+            recorder._opt if scene_option is None else scene_option,
+            None,
+            camera,
+            mujoco.mjtCatBit.mjCAT_ALL.value,
+            recorder._scn,
+        )
+        mujoco.mjr_render(recorder._vp, recorder._scn, recorder._con)
+        width, height = recorder._vp.width, recorder._vp.height
+        rgb = np.zeros((height, width, 3), dtype=np.uint8)
+        mujoco.mjr_readPixels(rgb, None, recorder._vp, recorder._con)
+        Image.fromarray(np.flipud(rgb)).save(output_path, quality=90)
+    finally:
+        for geom, alpha in saved_alpha.items():
+            model.geom_rgba[geom, 3] = alpha
 
 
 class SortingRollExpert:
@@ -485,6 +520,12 @@ class SortingRollExpert:
         self.out = Path(args.out).resolve()
         self.review_dir = self.out / "diagnostics" / "third_person"
         self.review_video = self.out / "sorting_roll_review.mp4"
+        self.slot_review_dir = (
+            self.out / "diagnostics" / "slot_physics_closeup"
+        )
+        self.slot_review_video = (
+            self.out / "sorting_roll_slot_physics_closeup.mp4"
+        )
         self.robot_camera_videos = {
             camera: self.out / f"sorting_roll_{camera}.mp4"
             for camera in RECORDED_CAMERAS
@@ -495,6 +536,7 @@ class SortingRollExpert:
         self.result_path = self.out / "result.json"
         self.roll_body = ct.bid("sorting_roll")
         self.roll_geom = ct.gid("sorting_roll_col")
+        self.shelf_visual_geom = ct.gid("sorting_shelf_visual")
         self.roll_joint = ct.jid("sorting_roll_free")
         self.roll_qpos_adr = int(self.model.jnt_qposadr[self.roll_joint])
         self.roll_dof_adr = int(self.model.jnt_dofadr[self.roll_joint])
@@ -555,6 +597,7 @@ class SortingRollExpert:
 
         self.out.mkdir(parents=True)
         self.review_dir.mkdir(parents=True)
+        self.slot_review_dir.mkdir(parents=True)
         ct.REC_WH = (args.width, args.height)
         self.recorder = ct.EpisodeRecorder(str(self.out))
         ct.REC.update({
@@ -565,14 +608,24 @@ class SortingRollExpert:
             "metadata": {
                 "task_version": TASK_VERSION,
                 "seed": args.seed,
-                "collection_profile": "sorting_roll_canary_v3_supported_fast",
+                "collection_profile": "sorting_roll_canary_v4_sdk_camera_review",
                 "training_eligible": False,
                 "success_source": "sorting_roll_task.SortingRollSuccessTracker",
                 "policy_cameras": list(POLICY_CAMERAS),
                 "review_only_cameras": list(REVIEW_ONLY_CAMERAS),
                 "recorded_cameras": list(RECORDED_CAMERAS),
-                "review_camera": (
-                    "free_camera_azimuth_135_not_policy_input"
+                "sdk_document_revision": SDK_DOC_REVISION,
+                "sdk_documented_rgb_cameras": list(
+                    SDK_DOCUMENTED_RGB_CAMERA_TOPICS
+                ),
+                "sdk_wrist_cameras": list(SDK_WRIST_CAMERAS),
+                "unmodeled_sdk_rgb_cameras": list(
+                    UNMODELED_SDK_RGB_CAMERAS
+                ),
+                "synthetic_wrist_cameras_recorded": False,
+                "review_camera": "free_camera_azimuth_135_not_policy_input",
+                "slot_physics_review_camera": (
+                    "free_camera_azimuth_90_collision_geometry_not_policy_input"
                 ),
                 "release_pad_sliding_friction": (
                     RELEASE_PAD_SLIDING_FRICTION
@@ -583,9 +636,18 @@ class SortingRollExpert:
         self.review_camera = mujoco.MjvCamera()
         self.review_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
         self.review_camera.lookat[:] = [0.40, -0.45, 0.76]
-        self.review_camera.distance = 3.15
+        self.review_camera.distance = 2.65
         self.review_camera.azimuth = 135.0
-        self.review_camera.elevation = -24.0
+        self.review_camera.elevation = -20.0
+
+        self.slot_review_camera = mujoco.MjvCamera()
+        self.slot_review_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+        self.slot_review_camera.lookat[:] = [0.7825, 0.0, 1.015]
+        self.slot_review_camera.distance = 0.90
+        self.slot_review_camera.azimuth = 90.0
+        self.slot_review_camera.elevation = -20.0
+        self.slot_review_option = mujoco.MjvOption()
+        self.slot_review_option.geomgroup[3] = 1
 
     def phase(self, name):
         self.ct.REC["phase"] = name
@@ -626,6 +688,17 @@ class SortingRollExpert:
                 self.data,
                 self.review_camera,
                 self.review_dir / f"frame_{self.recorder.n - 1:06d}.jpg",
+            )
+            render_third_person(
+                self.recorder,
+                self.mujoco,
+                self.model,
+                self.data,
+                self.slot_review_camera,
+                self.slot_review_dir
+                / f"frame_{self.recorder.n - 1:06d}.jpg",
+                scene_option=self.slot_review_option,
+                hidden_geom_ids=(self.shelf_visual_geom,),
             )
         return dt
 
@@ -1094,13 +1167,24 @@ class SortingRollExpert:
                     f"hand={hand} contacts={contacts}"
                 )
 
-    def follow_empty_hand_stage(self, hand, stage, targets):
+    def follow_empty_hand_stage(
+        self,
+        hand,
+        stage,
+        targets,
+        initial_ik_seed=None,
+    ):
         max_position_residual = 0.0
         max_rotation_residual = 0.0
         waypoint_count = 0
         for position, rotation in targets:
             waypoint_count += 1
-            seed = self.ct.qtgt[hand].copy()
+            start = self.ct.qtgt[hand].copy()
+            seed = (
+                np.asarray(initial_ik_seed, dtype=float)
+                if waypoint_count == 1 and initial_ik_seed is not None
+                else start
+            )
             target, residual, rotation_residual = (
                 self.solve_one_mount_target(
                     hand,
@@ -1121,7 +1205,7 @@ class SortingRollExpert:
                 )
             self.validate_one_arm_segment(
                 hand,
-                seed,
+                start,
                 target,
                 f"{hand}_{stage}",
             )
@@ -2262,9 +2346,6 @@ class SortingRollExpert:
             f"base={np.round(base, 4).tolist()}",
         )
 
-        self.phase("observe_roll")
-        self.frames(45)
-
         self.phase("approach_table_with_arms_down")
         self.go_to(TABLE_GRASP_XY, -math.pi / 2.0, max_speed=0.18)
         base = self.ct.base_pose()
@@ -2292,6 +2373,9 @@ class SortingRollExpert:
             f"measured_motion_rad={measured_motion:.4f}",
         )
 
+        self.phase("localize_roll_with_head_stereo")
+        self.frames(45)
+
         roll = self.roll_position()
         grasp_positions, rotations = self.flat_pick_mount_poses(roll)
         pregrasp_positions = {
@@ -2299,22 +2383,55 @@ class SortingRollExpert:
             + np.array([0.0, FLAT_PICK_PREGRASP_CLEARANCE_Y_M, 0.0])
             for hand, position in grasp_positions.items()
         }
-        self.phase("prepare_flat_grasp_after_observation")
-        for hand, direction in (("r", -1.0), ("l", 1.0)):
-            clearance_position = np.array([
-                direction * FLAT_PICK_CLEARANCE_X_M,
-                roll[1] + FLAT_PICK_CLEARANCE_Y_M,
-                roll[2] + FLAT_PICK_CLEARANCE_Z_M,
-            ])
-            clearance_rotation = grasp_target_rotation(
-                self.ct.R_DES,
-                direction,
+        self.phase("raise_and_flatten_after_stereo_localization")
+        branch_x, branch_y, branch_z = RIGHT_FLAT_PICK_IK_BRANCH_SEED_M
+        right_branch_seed, branch_residual, branch_rotation_residual = (
+            self.solve_one_mount_target(
+                "r",
+                self.ct.qtgt["r"].copy(),
+                np.array([
+                    -branch_x,
+                    roll[1] + branch_y,
+                    roll[2] + branch_z,
+                ]),
+                grasp_target_rotation(self.ct.R_DES, -1.0),
             )
+        )
+        self.gate(
+            "right_flat_pick_ik_branch_seed_reachable",
+            branch_residual <= 0.012
+            and branch_rotation_residual <= IK_ROTATION_TOLERANCE_DEG,
+            "computational_seed_only=true "
+            f"residual_mm={1000.0 * branch_residual:.2f} "
+            f"rotation_deg={branch_rotation_residual:.3f}",
+        )
+        for hand, direction in (("r", -1.0), ("l", 1.0)):
+            clearance_x, clearance_y, clearance_z = (
+                FLAT_PICK_CLEARANCE_M[hand]
+            )
+            clearance_position = np.array([
+                direction * clearance_x,
+                roll[1] + clearance_y,
+                roll[2] + clearance_z,
+            ])
             self.follow_empty_hand_stage(
                 hand,
-                "flat_pick_clearance",
-                [(clearance_position, clearance_rotation)],
+                "direct_flat_clearance",
+                [(clearance_position, rotations[hand])],
+                initial_ik_seed=(
+                    right_branch_seed if hand == "r" else None
+                ),
             )
+        spans = self.pad_vertical_span()
+        self.gate(
+            "hands_flat_after_localization_raise",
+            max(spans.values()) <= 0.025,
+            "pad_vertical_span_mm="
+            + json.dumps({
+                name: round(1000.0 * span, 1)
+                for name, span in spans.items()
+            }),
+        )
 
         self.phase("horizontal_pregrasp")
         for hand in ("r", "l"):
@@ -2508,12 +2625,23 @@ class SortingRollExpert:
             f"axis={np.round(insert_axis, 6).tolist()}",
         )
 
+        insert_start_x = float(self.roll_position()[0])
         self.phase("slow_forward_insert")
         self.slowly_insert_roll(
             insert_target,
             max_step=RELEASE_INSERT_STEP_M,
         )
         self.require_held("inserted_over_slot")
+        insert_end_x = float(self.roll_position()[0])
+        forward_insert_distance = insert_end_x - insert_start_x
+        self.gate(
+            "forward_insert_motion",
+            forward_insert_distance >= 0.025,
+            f"start_x={insert_start_x:.6f} "
+            f"end_x={insert_end_x:.6f} "
+            f"distance_mm={1000.0 * forward_insert_distance:.2f}",
+        )
+
         fit_margin = self.slot_fit_margin()
         self.gate(
             "pre_touch_slot_fit",
@@ -2672,6 +2800,10 @@ class SortingRollExpert:
             self.review_dir / "frame_%06d.jpg",
             self.review_video,
         )
+        self.encode_frame_video(
+            self.slot_review_dir / "frame_%06d.jpg",
+            self.slot_review_video,
+        )
         for camera, video_path in self.robot_camera_videos.items():
             self.encode_frame_video(
                 self.out / "frames" / camera / "frame_%06d.jpg",
@@ -2695,9 +2827,9 @@ class SortingRollExpert:
         command.extend([
             "-filter_complex",
             (
-                "xstack=inputs=5:layout="
-                f"0_0|{width}_0|{2 * width}_0|"
-                f"0_{height}|{width}_{height}:fill=black[v]"
+                "xstack=inputs=4:layout="
+                f"0_0|{width}_0|0_{height}|"
+                f"{width}_{height}:fill=black[v]"
             ),
             "-map",
             "[v]",
@@ -2745,6 +2877,7 @@ class SortingRollExpert:
                 ),
                 "training_eligible": False,
                 "review_video": self.review_video.name,
+                "slot_physics_review_video": self.slot_review_video.name,
                 "robot_camera_videos": {
                     camera: path.name
                     for camera, path in self.robot_camera_videos.items()
@@ -2771,6 +2904,7 @@ class SortingRollExpert:
             "gates": self.gates,
             "final_evidence": self.final_evidence,
             "review_video": str(self.review_video),
+            "slot_physics_review_video": str(self.slot_review_video),
             "robot_camera_videos": {
                 camera: str(path)
                 for camera, path in self.robot_camera_videos.items()

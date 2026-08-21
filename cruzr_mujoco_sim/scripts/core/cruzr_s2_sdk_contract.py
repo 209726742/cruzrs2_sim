@@ -94,6 +94,15 @@ SDK_CAMERA_TOPICS = {
     "waist_front": "/sensor/camera/waist_front_rgbd/color/raw",
     "chassis_front": "/sensor/camera/chassis_front_rgbd/color/raw",
 }
+SDK_DOCUMENTED_RGB_CAMERA_TOPICS = {
+    "chassis_front": "/sensor/camera/chassis_front_rgbd/color/raw",
+    "waist_front": "/sensor/camera/waist_front_rgbd/color/raw",
+    "fisheye_left": "/sensor/camera/fisheye_left/image/raw",
+    "fisheye_right": "/sensor/camera/fisheye_right/image/raw",
+    "stereo_left": "/sensor/camera/stereo_left/image/raw",
+    "stereo_right": "/sensor/camera/stereo_right/image/raw",
+}
+SDK_WRIST_CAMERAS = ()
 SDK_TASK_HEAD_POSE_RAD = {
     "head_yaw_joint": 0.0,
     "head_pitch_joint": -0.65,
@@ -133,6 +142,13 @@ def contract_summary() -> dict:
         "policy_image_map": dict(SDK_POLICY_IMAGE_MAP),
         "sdk_cameras": list(SDK_CAMERAS),
         "sdk_camera_topics": dict(SDK_CAMERA_TOPICS),
+        "documented_rgb_camera_count": len(
+            SDK_DOCUMENTED_RGB_CAMERA_TOPICS
+        ),
+        "documented_rgb_camera_topics": dict(
+            SDK_DOCUMENTED_RGB_CAMERA_TOPICS
+        ),
+        "wrist_cameras": list(SDK_WRIST_CAMERAS),
         "task_head_pose_rad": dict(SDK_TASK_HEAD_POSE_RAD),
         "gripper": {
             "position_range_m": list(SDK_GRIP_POSITION_RANGE_M),

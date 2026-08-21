@@ -13,6 +13,7 @@ docs/current/CRUZR_S2真机SDK对齐说明_0820.md
 
 # ===== 数据产物：5.3G / 40万文件，绝不入库 =====
 cruzr_mujoco_sim/out/
+cruzr_mujoco_sim/output/
 
 # ===== 环境 / 权重 =====
 envs/

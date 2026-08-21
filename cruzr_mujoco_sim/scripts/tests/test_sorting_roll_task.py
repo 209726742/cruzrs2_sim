@@ -11,6 +11,8 @@ if CORE not in sys.path:
     sys.path.insert(0, CORE)
 
 from sorting_roll_task import (
+    INSTANTANEOUS_CHECKS,
+    SLOT_FLOOR_GAP_TOLERANCE_M,
     SortingRollSuccessTracker,
     axis_alignment_degrees,
     fit_report,
@@ -29,6 +31,13 @@ class SortingRollTaskTest(unittest.TestCase):
         self.assertTrue(
             report["checks"]["physical_nominal_has_positive_slot_clearance"]
         )
+    def test_success_contract_requires_physical_slot_floor_contact(self):
+        self.assertIn(
+            "resting_on_slot_floor_geometry",
+            INSTANTANEOUS_CHECKS,
+        )
+        self.assertAlmostEqual(SLOT_FLOOR_GAP_TOLERANCE_M, 0.002)
+
 
     def test_axis_alignment_accepts_both_slot_directions(self):
         self.assertAlmostEqual(axis_alignment_degrees([0, 1, 0]), 0.0)

@@ -17,7 +17,7 @@
   <visual>
     <global offwidth="1280" offheight="960"/>
     <quality shadowsize="4096"/>
-    <headlight ambient="0.45 0.45 0.47" diffuse="0.62 0.62 0.62"/>
+    <headlight ambient="0.22 0.22 0.24" diffuse="0.36 0.36 0.36"/>
   </visual>
 
   <asset>
@@ -53,9 +53,9 @@
   </asset>
 
   <worldbody>
-    <light pos="0.2 -0.5 3.0" dir="0.1 0.1 -1" diffuse="0.78 0.78 0.78"/>
-    <light pos="2.4 1.8 2.5" dir="-0.5 -0.4 -1" diffuse="0.34 0.34 0.34"/>
-    <light pos="-1.8 -2.6 2.4" dir="0.4 0.5 -1" diffuse="0.30 0.30 0.30"/>
+    <light pos="0.2 -0.5 3.0" dir="0.1 0.1 -1" diffuse="0.48 0.48 0.48"/>
+    <light pos="2.4 1.8 2.5" dir="-0.5 -0.4 -1" diffuse="0.21 0.21 0.21"/>
+    <light pos="-1.8 -2.6 2.4" dir="0.4 0.5 -1" diffuse="0.19 0.19 0.19"/>
 
     <geom name="sorting_floor" type="plane" size="6 6 0.1" pos="0 0 0"
           material="sorting_floor_material" group="0" condim="3"

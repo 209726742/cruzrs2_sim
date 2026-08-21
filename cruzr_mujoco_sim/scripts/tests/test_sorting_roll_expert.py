@@ -26,9 +26,7 @@ from sorting_roll_expert import (
     FLAT_REGRASP_NEAR_END_M,
     FLAT_REGRASP_ORDER,
     FLAT_REGRASP_TARGET_ALONG_M,
-    FLAT_PICK_CLEARANCE_X_M,
-    FLAT_PICK_CLEARANCE_Y_M,
-    FLAT_PICK_CLEARANCE_Z_M,
+    FLAT_PICK_CLEARANCE_M,
     FLAT_PICK_HIGH_Z_M,
     FLAT_PICK_PREGRASP_CLEARANCE_Y_M,
     FLAT_PICK_TARGET_ALONG_M,
@@ -52,6 +50,7 @@ from sorting_roll_expert import (
     RELEASE_TIP_REGRASP_STAGE_X_M,
     RELEASE_TOUCH_STEP_M,
     RELEASE_WRIST_LEVEL_DEG,
+    RIGHT_FLAT_PICK_IK_BRANCH_SEED_M,
     POLICY_CAMERAS,
     RECORDED_CAMERAS,
     REVIEW_ONLY_CAMERAS,
@@ -199,34 +198,44 @@ class SortingRollExpertTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             cosine_steps(1.0, 0.0)
 
-    def test_v3_target_is_sourced_from_scene_contract(self):
-        self.assertEqual(TASK_VERSION, "sorting_roll_v3")
+    def test_v4_target_is_sourced_from_scene_contract(self):
+        self.assertEqual(TASK_VERSION, "sorting_roll_v4")
         np.testing.assert_allclose(TARGET_CENTER, SCENE_TARGET_CENTER)
 
-    def test_v3_records_policy_and_review_robot_cameras(self):
+    def test_v4_records_only_sdk_aligned_robot_cameras(self):
         self.assertEqual(
             POLICY_CAMERAS,
-            ("stereo_left", "stereo_right", "waist_front"),
+            ("stereo_left", "waist_front", "chassis_front"),
         )
-        self.assertEqual(REVIEW_ONLY_CAMERAS, ("hand_left", "hand_right"))
+        self.assertEqual(REVIEW_ONLY_CAMERAS, ("stereo_right",))
         self.assertEqual(
             RECORDED_CAMERAS,
-            POLICY_CAMERAS + REVIEW_ONLY_CAMERAS,
+            (
+                "stereo_left",
+                "stereo_right",
+                "waist_front",
+                "chassis_front",
+            ),
         )
+        self.assertNotIn("hand_left", RECORDED_CAMERAS)
+        self.assertNotIn("hand_right", RECORDED_CAMERAS)
 
     def test_supported_pick_targets_flat_hands_without_loaded_rotation(self):
         self.assertAlmostEqual(FLAT_PICK_TARGET_ALONG_M, 0.160)
         self.assertAlmostEqual(FLAT_PICK_TIP_BIAS_Y_M, 0.034)
         self.assertGreater(FLAT_PICK_PREGRASP_CLEARANCE_Y_M, 0.05)
         self.assertEqual(
-            (
-                FLAT_PICK_CLEARANCE_X_M,
-                FLAT_PICK_CLEARANCE_Y_M,
-                FLAT_PICK_CLEARANCE_Z_M,
-                FLAT_PICK_HIGH_Z_M,
-            ),
-            (0.320, 0.240, 0.240, 0.060),
+            FLAT_PICK_CLEARANCE_M,
+            {
+                "l": (0.330, 0.310, 0.100),
+                "r": (0.300, 0.210, 0.250),
+            },
         )
+        self.assertEqual(
+            RIGHT_FLAT_PICK_IK_BRANCH_SEED_M,
+            (0.320, 0.240, 0.240),
+        )
+        self.assertAlmostEqual(FLAT_PICK_HIGH_Z_M, 0.060)
         target_pad = np.array([0.16, -0.93, 1.112])
         rotation = flatten_target_rotation(
             grasp_target_rotation(np.diag([-1.0, 1.0, -1.0]), 1.0),
@@ -449,9 +458,9 @@ class SortingRollExpertTest(unittest.TestCase):
         ]
         phases = (
             "navigate_to_table_observation",
-            "observe_roll",
             "approach_table_with_arms_down",
-            "prepare_flat_grasp_after_observation",
+            "localize_roll_with_head_stereo",
+            "raise_and_flatten_after_stereo_localization",
             "horizontal_pregrasp",
             "horizontal_approach_and_grasp",
             "lift_flat_from_pickup_support",
@@ -482,6 +491,24 @@ class SortingRollExpertTest(unittest.TestCase):
             '"arms_unchanged_through_table_approach"',
             execute_source,
         )
+        self.assertNotIn('self.phase("observe_roll")', execute_source)
+        self.assertNotIn(
+            "clearance_rotation = grasp_target_rotation",
+            execute_source,
+        )
+        self.assertIn(
+            "[(clearance_position, rotations[hand])]",
+            execute_source,
+        )
+        self.assertIn(
+            '"right_flat_pick_ik_branch_seed_reachable"',
+            execute_source,
+        )
+        self.assertIn(
+            '"hands_flat_after_localization_raise"',
+            execute_source,
+        )
+        self.assertIn('"forward_insert_motion"', execute_source)
         self.assertNotIn('self.phase("flatten_hands")', execute_source)
         self.assertNotIn('self.phase("regrasp_at_release_tips")', execute_source)
         self.assertIn("self.regrasp_at_release_tips()", execute_source)
