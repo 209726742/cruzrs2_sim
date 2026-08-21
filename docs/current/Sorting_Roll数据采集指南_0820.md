@@ -108,6 +108,7 @@
 - 正常可见槽近景清楚显示棒子从槽上方前送、回中、张爪后落到两条蓝色护边之间；碰撞体近景在同一帧序列显示棒子落到真实槽底，双手后撤后位置不变。机器人四路画面均由模型固定相机渲染，并标明 `stereo_left/right → head_pitch_link`、`waist_front → waist_yaw_link`、`chassis_front → base/chassis`；不存在虚构手部相机。
 - 正式 SDK 审计器对四路评审元数据的唯一拒绝项是多出的 `stereo_right` 诊断流；将同一回合投影到冻结的三路策略相机契约后，关节范围、命令速度、底盘范围和相机—状态时间戳全部通过，最大时间偏差 `0 s`。长回合仍只在 tmux 会话 `sorting_roll_fast` 中运行；当前停止在用户视频评审点，不启动批量采集。
 - 交付前完整仓库回归为 `131/131` 通过，`bash Sorting_Roll/run_scene.sh check` 也通过布局、尺寸装配、运行时稳定、初始失败态和目标连续成功正例。候选目录为 `cruzr_mujoco_sim/output/sorting_roll_expert/_dev069/`；优先观看 `sorting_roll_review.mp4`、`sorting_roll_robot_multiview.mp4` 和两路 `sorting_roll_slot_*_closeup.mp4`。等待用户结论期间 tmux 会话保留但不运行采集任务。
+- 迁移前提：四个相机标签的实际位姿位于本机外部资产 `cruzr_mujoco_sim/assets/cruzr_pgc140.xml`，该目录按仓库规则受 `.gitignore` 管理，不会随代码提交。换机或重建资产时必须同步这份已修正 XML，或重新按 SDK 外参生成；否则 `sdk_camera_mounts` 运行时硬门会在机器人动作前拒绝回合，不能继续录制。
 
 ## 当前 tmux 执行记录
 
