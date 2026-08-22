@@ -3,6 +3,9 @@
 > 最后更新：2026-08-22
 >
 > 适用范围：`Sorting_Roll` MuJoCo 场景、CRUZR S2 人工遥操作，以及后续正式数据管线建设。
+>
+> 相机策略状态：正式组合尚未冻结；仿真侧优先候选为
+> `stereo_left / stereo_right / waist_front`，真机验证前不启动批量采集。
 
 ## 先说结论
 
@@ -17,6 +20,31 @@
 现已新增单回合评审专家 `scripts/collection/sorting_roll_expert.py`。`dev069` 曾通过旧外挂槽场景，但已被实物照片证伪并作废；当前 `sorting_roll_v8` 已改为货架自身的一体式层板，`dev070g` 无渲染回合和 `dev071` 多视角渲染回合都以 `70.217 s` 通过真实接触、完全释放、撤臂后稳定和两分钟时限。`dev071` 的 8 路视频已完成编码与抽帧验收，当前只等待用户主观观看决定；候选继续保持 `training_eligible=false`，不启动 20-seed 或批量采集。
 
 若视频获人工批准，再补齐“正式采集前必须完成的开发”并启动批量采集。若目标是在 48 小时内获得仿真 canary 数据，采用“单卡开发与验收、四卡短时批采、单卡补采与收尾”的成本敏感方案；不要从开发阶段就租用 4 卡或 8 卡。
+
+## 2026-08-22 相机第一性原理审计
+
+### 已确认事实
+
+- 原始 CRUZR S2 SDK 列出 `chassis_front / waist_front / fisheye_left / fisheye_right / stereo_left / stereo_right` 六路 RGB 端点，没有左右腕部 RGB 相机；`left_wrist_image / right_wrist_image` 只是 π0.5 兼容槽位名。
+- `dev071` 当前四路机器人相机都能对应 SDK 端点，运行时安装父级、位置和光轴门通过；但 `intrinsics_verified=false`，统一 `70° FOV` 仍是等待真机 `CameraInfo` 替换的仿真假设。
+- 当前正式映射是 `stereo_left / waist_front / chassis_front`，`stereo_right` 只作评审；历史 ECU smoke 使用过 `stereo_left / stereo_right / waist_front`。二者尚未经过同任务对照，不能默认等价。
+- 当前主机没有可用的 `ros2` 命令或真机相机流，因此只能证明 SDK 文档与仿真资产一致，不能证明这一台真机的六路端点都已安装、启用和同步。
+
+### 可重复审计方法
+
+- 新增 `scripts/collection/sorting_roll_camera_audit.py`，从 `episode_data.npz` 精确恢复双臂、夹爪、底盘和棒子位姿，再以 MuJoCo 对象分割在 π0.5 的 `224×224` 分辨率测量棒子无遮挡投影、实际可见面积、轴向跨度及目标层三个关键点是否入画。
+- 审计覆盖观察、接触抓取、运输、架前对准、层内送入和释放确认共 `18` 个阶段；每阶段取首、中、末三帧，共 `54` 个关键采样点。该门只用于拒绝明显不可观测的组合，通过不等于已经证明 π0.5 可学习。
+- 报告保存在 `output/sorting_roll_expert/v8_candidate_dev071/camera_observability.json`；完整任务在 tmux 中完成，输出日志为同目录 `camera_observability.log`。
+- 三路候选合成视频为同目录 `sorting_roll_policy_candidate_multiview.mp4`，已验证为 `960×540 / 30 FPS / 2106 帧 / 70.2 s`，只用于视角评审。
+
+### dev071 结果与决策
+
+- 当前三路 `stereo_left / waist_front / chassis_front` 覆盖 `54/54` 个关键点，但平均只有 `1.0` 路有效操作视角；实际上全部有效操作证据都来自左目。
+- `stereo_left / stereo_right / waist_front` 同样覆盖 `54/54`，平均有 `2.0` 路有效操作视角；左右双目都能看到棒子、两端方向跨度和最终目标层。
+- 四路全开仍只有平均 `2.0` 路有效操作视角，说明底盘相机没有增加棒子抓取或落槽的观测冗余，只增加约 25% 的图像渲染、写盘和视觉编码开销。
+- 腰前与底盘相机在全部关键阶段的棒子无遮挡投影均为 `0` 像素，但都能看到桌子或货架，作用属于导航上下文而非精细操作。人工复核显示底盘相机常被过近桌腿或层板裁切，腰前视角保留的机器人—目标整体关系更完整。
+- 因此仿真侧三路优先候选改为 `stereo_left / stereo_right / waist_front`；它是成本敏感的候选，不是正式冻结。不得在获得真机六路话题、`CameraInfo`、实拍停车位画面和时间同步证据前修改 SDK 正式契约或开始批量采集。
+- 当前 `dev071` 继续保持 `training_eligible=false`。下一准入步骤是真机同停车位相机审计；若真机暂不可用，只允许用当前四路原始数据做小规模相机消融 canary，不允许把第三视角、槽位近景或虚构腕部相机送入策略。
 
 ## 2026-08-22 实物参考图纠偏：目标槽属于货架本体
 
