@@ -1,36 +1,41 @@
 #!/usr/bin/env python3
-"""Success contract for placing the rigid roll in the shelf top slot."""
+"""Success contract for placing the rigid roll in the integrated top shelf."""
 
 import math
 
 import numpy as np
 
-from sorting_roll_scene import TARGET_AXIS, TARGET_CENTER
+from sorting_roll_scene import (
+    TARGET_AXIS,
+    TARGET_CENTER,
+    TOP_TIER_BACK_INNER_X_M,
+    TOP_TIER_FRONT_LIP_PEAK_Z_M,
+    TOP_TIER_FRONT_LIP_X_M,
+    TOP_TIER_TROUGH_TOP_Z_M,
+)
 
 
 ROLL_LENGTH_M = 0.5
 ROLL_VISUAL_DIAMETER_M = 0.025
 ROLL_COLLISION_RADIUS_M = 0.012
 SHELF_INNER_HALF_WIDTH_M = 0.285
-SLOT_CLEAR_WIDTH_M = 0.030
-SLOT_FLOOR_TO_MIDDLE_BAR_LOWER_EDGE_M = 0.120
-TARGET_X_TOLERANCE_M = 0.003
+TOP_TIER_CENTER_X_TOLERANCE_M = 0.020
 TARGET_Y_TOLERANCE_M = 0.055
 TARGET_Z_TOLERANCE_M = 0.012
 TARGET_AXIS_TOLERANCE_DEG = 10.0
 SUPPORT_FORCE_MIN_N = 0.5
 RELEASE_FORCE_MAX_N = 0.2
-SLOT_FLOOR_GAP_TOLERANCE_M = 0.002
+TOP_TIER_TROUGH_GAP_TOLERANCE_M = 0.002
 LINEAR_SPEED_MAX_M_S = 0.02
 ANGULAR_SPEED_MAX_RAD_S = 0.10
 REQUIRED_STABLE_SECONDS = 0.5
 
 INSTANTANEOUS_CHECKS = (
-    "center_in_slot",
+    "center_inside_integrated_top_tier",
     "fully_inside_shelf_width",
-    "axis_aligned_with_slot",
-    "supported_by_slot_floor",
-    "resting_on_slot_floor_geometry",
+    "axis_aligned_with_shelf",
+    "supported_by_integrated_top_tier",
+    "resting_on_integrated_top_tier_geometry",
     "released_from_both_grippers",
     "not_supported_by_table",
     "low_linear_speed",
@@ -41,20 +46,26 @@ INSTANTANEOUS_CHECKS = (
 def fit_report():
     shelf_usable_width = 2.0 * SHELF_INNER_HALF_WIDTH_M
     length_clearance = shelf_usable_width - ROLL_LENGTH_M
-    simulated_diameter = 2.0 * ROLL_COLLISION_RADIUS_M
-    simulated_slot_clearance = SLOT_CLEAR_WIDTH_M - simulated_diameter
-    physical_nominal_slot_clearance = (
-        SLOT_CLEAR_WIDTH_M - ROLL_VISUAL_DIAMETER_M
+    roll_to_shelf_width_ratio = ROLL_LENGTH_M / shelf_usable_width
+    integrated_pocket_depth = (
+        TOP_TIER_BACK_INNER_X_M - TOP_TIER_FRONT_LIP_X_M
     )
-    middle_bar_clearance = (
-        SLOT_FLOOR_TO_MIDDLE_BAR_LOWER_EDGE_M - ROLL_VISUAL_DIAMETER_M
+    pocket_depth_clearance = (
+        integrated_pocket_depth - ROLL_VISUAL_DIAMETER_M
+    )
+    front_lip_rise = (
+        TOP_TIER_FRONT_LIP_PEAK_Z_M - TOP_TIER_TROUGH_TOP_Z_M
     )
     checks = {
         "roll_length_fits_shelf_inner_width": bool(length_clearance > 0.0),
-        "simulated_collider_fits_slot": bool(simulated_slot_clearance > 0.0),
-        "middle_bar_has_vertical_clearance": bool(middle_bar_clearance > 0.0),
-        "physical_nominal_has_positive_slot_clearance": bool(
-            physical_nominal_slot_clearance > 0.0
+        "roll_length_ratio_is_80_to_90_percent": bool(
+            0.80 <= roll_to_shelf_width_ratio <= 0.90
+        ),
+        "integrated_pocket_deeper_than_roll_diameter": bool(
+            pocket_depth_clearance > 0.0
+        ),
+        "front_lip_rises_above_roll_center": bool(
+            front_lip_rise > ROLL_COLLISION_RADIUS_M
         ),
     }
     return {
@@ -62,21 +73,14 @@ def fit_report():
         "roll_length_m": ROLL_LENGTH_M,
         "length_clearance_total_m": length_clearance,
         "length_clearance_each_end_m": length_clearance / 2.0,
-        "slot_clear_width_m": SLOT_CLEAR_WIDTH_M,
+        "roll_to_shelf_width_ratio": roll_to_shelf_width_ratio,
         "roll_visual_diameter_m": ROLL_VISUAL_DIAMETER_M,
-        "roll_collider_diameter_m": simulated_diameter,
-        "simulated_slot_clearance_m": simulated_slot_clearance,
-        "physical_nominal_slot_clearance_m": physical_nominal_slot_clearance,
-        "middle_bar_vertical_clearance_m": middle_bar_clearance,
+        "roll_collider_diameter_m": 2.0 * ROLL_COLLISION_RADIUS_M,
+        "integrated_pocket_depth_m": integrated_pocket_depth,
+        "pocket_depth_clearance_m": pocket_depth_clearance,
+        "front_lip_rise_m": front_lip_rise,
         "checks": checks,
-        "simulation_fits": all(
-            checks[name]
-            for name in (
-                "roll_length_fits_shelf_inner_width",
-                "simulated_collider_fits_slot",
-                "middle_bar_has_vertical_clearance",
-            )
-        ),
+        "simulation_fits": all(checks.values()),
     }
 
 
@@ -137,9 +141,17 @@ def evaluate_placement(model, data):
     roll_geom = _named_id(
         mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "sorting_roll_col"
     )
-    slot_floor = _named_id(
-        mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "target_slot_floor_col"
+    trough_geom = _named_id(
+        mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "shelf_top_trough_col"
     )
+    integrated_support_geoms = {
+        _named_id(mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        for name in (
+            "shelf_top_front_lip_col",
+            "shelf_top_trough_col",
+            "shelf_top_back_slope_col",
+        )
+    }
     table_top = _named_id(
         mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "table_top_col"
     )
@@ -163,16 +175,16 @@ def evaluate_placement(model, data):
         + ROLL_COLLISION_RADIUS_M
         * math.sqrt(max(0.0, 1.0 - float(roll_axis[2]) ** 2))
     )
-    slot_floor_rotation = data.geom_xmat[slot_floor].reshape(3, 3)
-    slot_floor_half_z = float(
-        np.abs(slot_floor_rotation[2])
-        @ model.geom_size[slot_floor, :3]
+    trough_rotation = data.geom_xmat[trough_geom].reshape(3, 3)
+    trough_half_z = float(
+        np.abs(trough_rotation[2])
+        @ model.geom_size[trough_geom, :3]
     )
-    slot_floor_top_z = float(
-        data.geom_xpos[slot_floor, 2] + slot_floor_half_z
+    trough_top_z = float(
+        data.geom_xpos[trough_geom, 2] + trough_half_z
     )
     roll_bottom_z = float(center[2] - half_z_span)
-    slot_floor_gap = roll_bottom_z - slot_floor_top_z
+    trough_gap = roll_bottom_z - trough_top_z
 
     endpoint_margin_m = {
         "negative_y": float(
@@ -182,10 +194,13 @@ def evaluate_placement(model, data):
             SHELF_INNER_HALF_WIDTH_M - center[1] - half_y_span
         ),
     }
-    slot_contact = _contact_report(
-        mujoco, model, data, {roll_geom}, {slot_floor}
+    trough_contact = _contact_report(
+        mujoco, model, data, {roll_geom}, {trough_geom}
     )
-    slot_support = slot_contact["force_n"]
+    integrated_contact = _contact_report(
+        mujoco, model, data, {roll_geom}, integrated_support_geoms
+    )
+    integrated_support = integrated_contact["force_n"]
     table_support = _contact_force(
         mujoco, model, data, {roll_geom}, {table_top}
     )
@@ -196,8 +211,9 @@ def evaluate_placement(model, data):
     linear_speed = float(np.linalg.norm(data.cvel[roll_body, 3:]))
 
     checks = {
-        "center_in_slot": bool(
-            abs(center[0] - TARGET_CENTER[0]) <= TARGET_X_TOLERANCE_M
+        "center_inside_integrated_top_tier": bool(
+            abs(center[0] - TARGET_CENTER[0])
+            <= TOP_TIER_CENTER_X_TOLERANCE_M
             and abs(center[1] - TARGET_CENTER[1]) <= TARGET_Y_TOLERANCE_M
             and abs(center[2] - TARGET_CENTER[2]) <= TARGET_Z_TOLERANCE_M
         ),
@@ -205,13 +221,15 @@ def evaluate_placement(model, data):
             endpoint_margin_m["negative_y"] >= 0.0
             and endpoint_margin_m["positive_y"] >= 0.0
         ),
-        "axis_aligned_with_slot": bool(
+        "axis_aligned_with_shelf": bool(
             alignment_degrees <= TARGET_AXIS_TOLERANCE_DEG
         ),
-        "supported_by_slot_floor": bool(slot_support >= SUPPORT_FORCE_MIN_N),
-        "resting_on_slot_floor_geometry": bool(
-            slot_contact["count"] > 0
-            and abs(slot_floor_gap) <= SLOT_FLOOR_GAP_TOLERANCE_M
+        "supported_by_integrated_top_tier": bool(
+            integrated_support >= SUPPORT_FORCE_MIN_N
+        ),
+        "resting_on_integrated_top_tier_geometry": bool(
+            integrated_contact["count"] >= 2
+            and abs(trough_gap) <= TOP_TIER_TROUGH_GAP_TOLERANCE_M
         ),
         "released_from_both_grippers": bool(gripper_force <= RELEASE_FORCE_MAX_N),
         "not_supported_by_table": bool(table_support < SUPPORT_FORCE_MIN_N),
@@ -223,11 +241,16 @@ def evaluate_placement(model, data):
         "axis": np.round(roll_axis, 6).tolist(),
         "axis_error_deg": round(alignment_degrees, 4),
         "half_y_span_m": round(half_y_span, 6),
-        "slot_support_force_n": round(slot_support, 4),
-        "slot_floor_contact_count": slot_contact["count"],
-        "slot_floor_contact_positions_m": slot_contact["positions_m"],
-        "slot_floor_contact_distances_m": slot_contact["distances_m"],
-        "roll_bottom_to_slot_floor_gap_m": round(slot_floor_gap, 7),
+        "integrated_top_tier_support_force_n": round(
+            integrated_support, 4
+        ),
+        "top_tier_contact_count": integrated_contact["count"],
+        "top_tier_contact_positions_m": integrated_contact["positions_m"],
+        "top_tier_contact_distances_m": integrated_contact["distances_m"],
+        "trough_contact_count": trough_contact["count"],
+        "trough_contact_positions_m": trough_contact["positions_m"],
+        "trough_contact_distances_m": trough_contact["distances_m"],
+        "roll_bottom_to_trough_gap_m": round(trough_gap, 7),
         "endpoint_margin_m": {
             side: round(margin, 6)
             for side, margin in endpoint_margin_m.items()

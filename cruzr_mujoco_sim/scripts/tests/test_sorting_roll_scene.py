@@ -112,7 +112,7 @@ class SortingRollSceneTest(unittest.TestCase):
             "table_top_col",
             "roll_support_x_negative_base_col",
             "roll_support_x_positive_base_col",
-            "target_slot_floor_col",
+            "shelf_top_trough_col",
             "sorting_roll_target",
         }.issubset(names))
 
@@ -143,83 +143,79 @@ class SortingRollSceneTest(unittest.TestCase):
         self.assertIn("TELEOP_FPS=${TELEOP_FPS:-60}", script)
         self.assertIn("opencv-python==4.11.0.86", script)
 
-    def test_top_tier_measurements(self):
+    def test_top_tier_collision_matches_integrated_shelf_cross_section(self):
         root = ET.parse(scene.TEMPLATE_PATH).getroot()
         geoms = {
             element.attrib["name"]: element.attrib
             for element in root.iter("geom")
             if "name" in element.attrib
         }
-        front_guard = geoms["target_slot_front_guard_col"]
-        back_guard = geoms["target_slot_back_guard_col"]
-        middle_bar = geoms["target_middle_bar_col"]
-        top_bar = geoms["target_top_bar_col"]
-        floor = geoms["target_slot_floor_col"]
-        front_pos = np.fromstring(front_guard["pos"], sep=" ")
-        front_size = np.fromstring(front_guard["size"], sep=" ")
-        back_pos = np.fromstring(back_guard["pos"], sep=" ")
-        back_size = np.fromstring(back_guard["size"], sep=" ")
-        middle_pos = np.fromstring(middle_bar["pos"], sep=" ")
-        top_pos = np.fromstring(top_bar["pos"], sep=" ")
-        top_size = np.fromstring(top_bar["size"], sep=" ")
-        floor_pos = np.fromstring(floor["pos"], sep=" ")
-        floor_size = np.fromstring(floor["size"], sep=" ")
-        floor_top = floor_pos[2] + floor_size[2]
-        slot_width = (
-            back_pos[0] - back_size[0]
-            - (front_pos[0] + front_size[0])
-        )
-        post_left = geoms["shelf_post_front_left_col"]
-        post_right = geoms["shelf_post_front_right_col"]
-        left_pos = np.fromstring(post_left["pos"], sep=" ")
-        left_size = np.fromstring(post_left["size"], sep=" ")
-        right_pos = np.fromstring(post_right["pos"], sep=" ")
-        right_size = np.fromstring(post_right["size"], sep=" ")
-        shelf_inner_half_width = left_pos[1] - left_size[1]
-        self.assertAlmostEqual(shelf_inner_half_width, 0.285)
-        self.assertAlmostEqual(
-            right_pos[1] + right_size[1], -shelf_inner_half_width
-        )
-        top_height = top_pos[2] + top_size[2]
-        self.assertAlmostEqual(floor_top, 1.0)
-        self.assertAlmostEqual(2.0 * front_size[2], 0.05)
-        self.assertAlmostEqual(slot_width, 0.030)
-        self.assertAlmostEqual(middle_pos[2] - floor_top, 0.13)
-        self.assertAlmostEqual(top_height, 1.2)
-        self.assertAlmostEqual(scene.TARGET_CENTER[2], 1.0125)
-        self.assertAlmostEqual(floor_pos[0], scene.TARGET_CENTER[0])
-        self.assertAlmostEqual(front_pos[0] + 0.0225, scene.TARGET_CENTER[0])
-        self.assertAlmostEqual(back_pos[0] - 0.0225, scene.TARGET_CENTER[0])
+        integrated_names = {
+            "shelf_top_front_lip_col",
+            "shelf_top_trough_col",
+            "shelf_top_back_slope_col",
+            "shelf_top_back_panel_col",
+        }
+        self.assertTrue(integrated_names.issubset(geoms))
+        self.assertTrue({
+            "shelf_tier4_col",
+            "target_slot_floor_col",
+            "target_slot_front_guard_col",
+            "target_slot_back_guard_col",
+            "target_middle_bar_col",
+            "target_top_bar_col",
+        }.isdisjoint(geoms))
 
-    def test_visible_slot_is_exactly_aligned_with_collision_slot(self):
+        trough = geoms["shelf_top_trough_col"]
+        trough_pos = np.fromstring(trough["pos"], sep=" ")
+        trough_size = np.fromstring(trough["size"], sep=" ")
+        np.testing.assert_allclose(
+            trough_pos,
+            [scene.TOP_TIER_TROUGH_CENTER_X_M, 0.0, 0.884],
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(trough_size, [0.010, 0.285, 0.004])
+        self.assertAlmostEqual(
+            trough_pos[2] + trough_size[2],
+            scene.TOP_TIER_TROUGH_TOP_Z_M,
+        )
+        np.testing.assert_allclose(
+            scene.TARGET_CENTER,
+            [
+                scene.TOP_TIER_TROUGH_CENTER_X_M,
+                0.0,
+                scene.TOP_TIER_TROUGH_TOP_Z_M + scene.ROLL_RADIUS_M,
+            ],
+        )
+        self.assertGreaterEqual(
+            scene.TARGET_CENTER[0],
+            scene.SHELF_BOUNDS[0, 0],
+        )
+        self.assertLessEqual(
+            scene.TARGET_CENTER[0],
+            scene.SHELF_BOUNDS[1, 0],
+        )
+        for name in integrated_names:
+            self.assertEqual(geoms[name]["group"], "3")
+            self.assertEqual(geoms[name]["contype"], "1")
+            self.assertEqual(geoms[name]["conaffinity"], "3")
+        self.assertIn("quat", geoms["shelf_top_front_lip_col"])
+        self.assertIn("quat", geoms["shelf_top_back_slope_col"])
+
+    def test_integrated_top_tier_adds_no_external_visual_slot(self):
         root = ET.parse(scene.TEMPLATE_PATH).getroot()
         geoms = {
             element.attrib["name"]: element.attrib
             for element in root.iter("geom")
             if "name" in element.attrib
         }
-        for part in ("floor", "front_guard", "back_guard"):
-            collision = geoms[f"target_slot_{part}_col"]
-            visual = geoms[f"target_slot_{part}_visual"]
-            np.testing.assert_allclose(
-                np.fromstring(visual["pos"], sep=" "),
-                np.fromstring(collision["pos"], sep=" "),
-                atol=1e-12,
-            )
-            np.testing.assert_allclose(
-                np.fromstring(visual["size"], sep=" "),
-                np.fromstring(collision["size"], sep=" "),
-                atol=1e-12,
-            )
-            self.assertEqual(collision["group"], "3")
-            self.assertEqual(visual["group"], "1")
-            self.assertEqual(visual["contype"], "0")
-        self.assertAlmostEqual(
-            np.fromstring(
-                geoms["target_slot_floor_col"]["size"], sep=" "
-            )[1],
-            0.285,
+        self.assertFalse(
+            any(name.startswith("target_slot_") for name in geoms),
+            sorted(geoms),
         )
+        shelf_visual = geoms["sorting_shelf_visual"]
+        self.assertEqual(shelf_visual["group"], "1")
+        self.assertEqual(shelf_visual["contype"], "0")
 
 if __name__ == "__main__":
     unittest.main()

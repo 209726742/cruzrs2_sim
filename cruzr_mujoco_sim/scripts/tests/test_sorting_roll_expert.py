@@ -41,25 +41,23 @@ from sorting_roll_expert import (
     INSERT_AXIS_CORRECTION_MIN_CLEARANCE_M,
     INSERT_AXIS_CORRECTION_MAX_STEP_M,
     RELEASE_APPROACH_Y_BIAS_M,
-    RELEASE_BACKWARD_WITHDRAWAL_M,
+    RELEASE_CLEARANCE_LIFT_M,
+    RELEASE_CLEARANCE_ROLL_Z,
+    RELEASE_DROP_MAX_M,
     RELEASE_FRICTION_SETTLE_TICKS,
+    RELEASE_GUARDED_DROP_Z_M,
     RELEASE_INSERT_STEP_M,
+    RELEASE_INSERT_TARGET_X_M,
     RELEASE_PAD_SLIDING_FRICTION,
-    RELEASE_RECENTER_MAX_M,
-    RELEASE_RECENTER_MIN_INNER_FIT_M,
-    RELEASE_PRE_TOUCH_X_M,
-    RELEASE_ROLL_Z,
-    RELEASE_TIP_REGRASP_X_M,
-    RELEASE_TIP_REGRASP_STAGE_X_M,
-    RELEASE_TOUCH_STEP_M,
-    RELEASE_WRIST_LEVEL_DEG,
+    RELEASE_PAD_SHELF_CLEARANCE_MIN_M,
+    ROLL_RADIUS,
+    SHELF_STAGE_OFFSET_X,
     POLICY_CAMERAS,
     RECORDED_CAMERAS,
     REVIEW_ONLY_CAMERAS,
     TASK_VERSION,
     TARGET_CENTER,
     TARGET_AXIS,
-    SLOT_CAPTURE_HALF_WIDTH,
     SLOT_PHYSICS_REVIEW_CAMERA,
     SLOT_VISUAL_REVIEW_CAMERA,
     anchor_feedback_mount_position,
@@ -72,9 +70,10 @@ from sorting_roll_expert import (
     coupled_regrasp_progress,
     coordination_clearance_mask,
     monotonic_coordination_indices,
-    cylinder_slot_fit_margin,
     flat_regrasp_anchors,
-    cylinder_capture_margin,
+    integrated_depth_margin,
+    guarded_release_geometry_is_ready,
+    guarded_release_is_ready,
     flatten_target_rotation,
     grasp_target_rotation,
     insertion_axis_is_safe,
@@ -85,6 +84,7 @@ from sorting_roll_expert import (
     rotation_axis_angle,
     rotation_z,
     roll_half_extent_x,
+    resolved_geom_clearance,
     symmetric_level_correction,
     symmetric_axis_correction,
 )
@@ -109,23 +109,25 @@ class SortingRollExpertTest(unittest.TestCase):
             bounded_vector([0.1, 0.0, 0.0], 2.0), [0.1, 0.0, 0.0]
         )
 
-    def test_cylinder_slot_fit_margin_accounts_for_center_and_axis(self):
+    def test_integrated_depth_margin_accounts_for_center_and_axis(self):
         center_x = float(TARGET_CENTER[0])
         self.assertAlmostEqual(roll_half_extent_x(0.0), 0.012)
         self.assertAlmostEqual(roll_half_extent_x(1.0), 0.25)
         self.assertAlmostEqual(
-            cylinder_slot_fit_margin(center_x, 0.0), 0.003
-        )
-        self.assertAlmostEqual(
-            cylinder_slot_fit_margin(center_x + 0.0004, 0.0), 0.0026
-        )
-        self.assertLess(cylinder_slot_fit_margin(center_x, 0.015), 0.0)
-
-        self.assertAlmostEqual(
-            cylinder_capture_margin(center_x, 0.0), 0.018
+            integrated_depth_margin(center_x, 0.0),
+            0.011,
         )
         self.assertGreater(
-            cylinder_capture_margin(0.778181, 0.001910), 0.0
+            integrated_depth_margin(center_x, 0.0),
+            0.005,
+        )
+        self.assertLess(
+            integrated_depth_margin(0.7825, 0.0),
+            0.0,
+        )
+        self.assertLess(
+            integrated_depth_margin(center_x, 0.05),
+            0.0,
         )
     def test_insert_axis_monitor_accepts_dev050_drift_but_stays_bounded(self):
         self.assertTrue(insertion_axis_is_safe([0.00091, 0.999997, -0.0021]))
@@ -163,40 +165,69 @@ class SortingRollExpertTest(unittest.TestCase):
             ])
         )
 
-    def test_release_geometry_uses_continuous_backward_withdrawal(self):
+    def test_release_geometry_enters_before_lowering_and_lifts_to_exit(self):
         self.assertAlmostEqual(ARM_RETRACT_M, 0.082)
-        self.assertAlmostEqual(RELEASE_ROLL_Z, 1.128)
+        self.assertAlmostEqual(SHELF_STAGE_OFFSET_X, -0.050)
+        self.assertAlmostEqual(RELEASE_CLEARANCE_ROLL_Z, 0.955)
+        self.assertAlmostEqual(RELEASE_GUARDED_DROP_Z_M, 0.951)
         self.assertAlmostEqual(RELEASE_APPROACH_Y_BIAS_M, 0.0)
         self.assertAlmostEqual(
-            RELEASE_PRE_TOUCH_X_M - float(TARGET_CENTER[0]),
-            0.0025,
+            RELEASE_INSERT_TARGET_X_M,
+            float(TARGET_CENTER[0]) + 0.040,
         )
         self.assertGreaterEqual(
-            cylinder_slot_fit_margin(
-                RELEASE_PRE_TOUCH_X_M,
+            RELEASE_CLEARANCE_ROLL_Z - ROLL_RADIUS - 0.915,
+            0.025,
+        )
+        self.assertGreaterEqual(
+            integrated_depth_margin(
+                RELEASE_INSERT_TARGET_X_M,
                 INSERT_AXIS_X_SAFETY_LIMIT,
             ),
-            0.00005,
+            0.020,
         )
-        self.assertAlmostEqual(RELEASE_TOUCH_STEP_M, 0.0001)
-        self.assertAlmostEqual(RELEASE_WRIST_LEVEL_DEG, 4.0)
-        self.assertEqual(
-            RELEASE_TIP_REGRASP_X_M,
-            {"l": -0.004, "r": -0.004},
-        )
-        self.assertAlmostEqual(RELEASE_TIP_REGRASP_STAGE_X_M, 0.750)
-        self.assertAlmostEqual(
-            RELEASE_PRE_TOUCH_X_M - RELEASE_TIP_REGRASP_STAGE_X_M,
-            0.035,
-        )
-        self.assertAlmostEqual(RELEASE_INSERT_STEP_M, 0.008)
+        self.assertAlmostEqual(RELEASE_INSERT_STEP_M, 0.006)
         self.assertLessEqual(RELEASE_INSERT_STEP_M, 0.010)
-        self.assertAlmostEqual(RELEASE_BACKWARD_WITHDRAWAL_M, 0.024)
-        self.assertAlmostEqual(SLOT_CAPTURE_HALF_WIDTH, 0.030)
+        self.assertAlmostEqual(RELEASE_DROP_MAX_M, 0.025)
+        self.assertAlmostEqual(
+            RELEASE_PAD_SHELF_CLEARANCE_MIN_M,
+            0.002,
+        )
+        self.assertAlmostEqual(RELEASE_CLEARANCE_LIFT_M, 0.050)
         self.assertAlmostEqual(RELEASE_PAD_SLIDING_FRICTION, 1.0)
-        self.assertAlmostEqual(RELEASE_RECENTER_MAX_M, 0.006)
-        self.assertAlmostEqual(RELEASE_RECENTER_MIN_INNER_FIT_M, 0.001)
         self.assertEqual(RELEASE_FRICTION_SETTLE_TICKS, 12)
+
+    def test_guarded_release_bounds_drop_and_pad_clearance(self):
+        self.assertTrue(guarded_release_is_ready(0.020, 0.003))
+        self.assertFalse(guarded_release_is_ready(-1e-6, 0.003))
+        self.assertFalse(guarded_release_is_ready(0.026, 0.003))
+        self.assertFalse(guarded_release_is_ready(0.020, 0.001))
+
+    def test_guarded_release_geometry_does_not_reuse_final_height(self):
+        margins = {"negative_y": 0.030, "positive_y": 0.030}
+        self.assertTrue(
+            guarded_release_geometry_is_ready(margins, 4.0, 0.006)
+        )
+        self.assertFalse(
+            guarded_release_geometry_is_ready(margins, 5.1, 0.006)
+        )
+        self.assertFalse(
+            guarded_release_geometry_is_ready(margins, 4.0, 0.004)
+        )
+
+    def test_resolved_clearance_uses_witness_only_without_contact(self):
+        self.assertAlmostEqual(
+            resolved_geom_clearance(0.0, 0.020, False),
+            0.020,
+        )
+        self.assertEqual(
+            resolved_geom_clearance(0.0, 0.020, True),
+            0.0,
+        )
+        self.assertEqual(
+            resolved_geom_clearance(-0.001, 0.020, False),
+            -0.001,
+        )
 
     def test_cosine_steps_respects_peak_step_bound(self):
         steps = cosine_steps(1.0, 0.01, minimum=2)
@@ -229,11 +260,11 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             joint_polyline_at_progress(waypoints, -0.01)
-    def test_v7_target_is_sourced_from_scene_contract(self):
-        self.assertEqual(TASK_VERSION, "sorting_roll_v7")
+    def test_v8_target_is_sourced_from_scene_contract(self):
+        self.assertEqual(TASK_VERSION, "sorting_roll_v8")
         np.testing.assert_allclose(TARGET_CENTER, SCENE_TARGET_CENTER)
 
-    def test_v7_records_only_sdk_aligned_robot_cameras(self):
+    def test_v8_records_only_sdk_aligned_robot_cameras(self):
         self.assertEqual(
             POLICY_CAMERAS,
             ("stereo_left", "waist_front", "chassis_front"),
@@ -251,7 +282,7 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertNotIn("hand_left", RECORDED_CAMERAS)
         self.assertNotIn("hand_right", RECORDED_CAMERAS)
 
-    def test_v7_compiled_camera_mounts_match_sdk_extrinsics(self):
+    def test_v8_compiled_camera_mounts_match_sdk_extrinsics(self):
         import mujoco
 
         model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))
@@ -283,8 +314,8 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertGreater(FLAT_PICK_GOAL_IK_SEEDS["l"][4], 0.0)
         self.assertGreater(FLAT_PICK_GOAL_IK_SEEDS["r"][4], 0.0)
         self.assertEqual(FLAT_PICK_COORDINATION_CLEARANCE_CELLS, 1)
-        self.assertEqual(SLOT_VISUAL_REVIEW_CAMERA, (0.72, -45.0, -50.0))
-        self.assertEqual(SLOT_PHYSICS_REVIEW_CAMERA, (0.72, 180.0, -60.0))
+        self.assertEqual(SLOT_VISUAL_REVIEW_CAMERA, (0.85, -45.0, -45.0))
+        self.assertEqual(SLOT_PHYSICS_REVIEW_CAMERA, (0.85, -45.0, -45.0))
         target_pad = np.array([0.16, -0.93, 1.112])
         rotation = flatten_target_rotation(
             grasp_target_rotation(np.diag([-1.0, 1.0, -1.0]), 1.0),
@@ -544,18 +575,15 @@ class SortingRollExpertTest(unittest.TestCase):
             "clear_table",
             "rotate_to_shelf",
             "navigate_to_shelf_stage",
-            "align_slot_axis_above_shelf",
+            "align_shelf_axis_above_front_lip",
             "realign_shelf_stage_after_axis",
-            "lower_near_top_slot",
             "level_release_support_surfaces",
-            "position_grip_at_release_edge",
-            "fine_align_slot_axis_before_insert",
-            "recenter_low_stage_before_insert",
-            "verify_slot_axis_before_insert",
-            "slow_forward_insert",
-            "gentle_touch_shelf",
-            "position_above_top_slot_for_release",
-            "release",
+            "fine_align_axis_before_entry",
+            "lower_to_front_lip_clearance",
+            "move_over_integrated_front_lip",
+            "position_guarded_release_clearance",
+            "guarded_release_and_lift_open_hands",
+            "verify_after_guarded_release",
             "retract_arms_after_release",
             "terminal_success_hold",
         )
@@ -616,15 +644,15 @@ class SortingRollExpertTest(unittest.TestCase):
             '"hands_flat_after_localization_raise"',
             execute_source,
         )
-        self.assertIn('"forward_insert_motion"', execute_source)
+        self.assertIn('"forward_entry_motion"', execute_source)
         self.assertNotIn('self.phase("flatten_hands")', execute_source)
-        self.assertNotIn('self.phase("regrasp_at_release_tips")', execute_source)
-        self.assertIn("self.regrasp_at_release_tips()", execute_source)
+        self.assertNotIn("position_grip_at_release_edge", execute_source)
+        self.assertNotIn("regrasp_at_release_tips", execute_source)
         self.assertIn(
-            "self.release_with_backward_withdrawal()",
+            "self.release_into_integrated_top_tier()",
             execute_source,
         )
-        self.assertNotIn("release_with_axis_withdrawal", execute_source)
+        self.assertNotIn("release_with_backward_withdrawal", execute_source)
 
     def test_review_multiview_labels_sdk_camera_mounts(self):
 
@@ -640,38 +668,49 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertIn("slot_visual_review_video", encode_source)
         self.assertIn("slot_physics_review_video", encode_source)
 
-    def test_low_pad_friction_starts_only_after_gentle_touch(self):
+    def test_guarded_release_lifts_while_opening_before_retracting(self):
         source = (
             COLLECTION_DIR / "sorting_roll_expert.py"
         ).read_text(encoding="utf-8")
-        lower = source[
-            source.index('self.phase("lower_near_top_slot")'):
-            source.index('self.phase("level_release_support_surfaces")')
-        ]
         release = source[
-            source.index("def release_with_backward_withdrawal"):
+            source.index("def release_into_integrated_top_tier"):
             source.index("def track_success")
         ]
-        self.assertNotIn("geom_friction", lower)
         self.assertLess(
             release.index("geom_friction"),
             release.index('self.ct.grip_cmd["l"]'),
         )
-        self.assertIn("-RELEASE_BACKWARD_WITHDRAWAL_M", release)
-        self.assertNotIn("RELEASE_OPEN_RAISE_M", release)
-        self.assertNotIn("center_x_correction", release)
-        self.assertIn(
-            '"release_recentered_inside_slot"',
-            release,
-        )
+        self.assertIn('"guarded_release_ready"', release)
         self.assertLess(
-            release.index('"release_recentered_inside_slot"'),
+            release.index('"guarded_release_ready"'),
             release.index('self.ct.grip_cmd["l"]'),
         )
-        self.assertNotIn("release_touch_force_relief", release)
-
-
-        self.assertNotIn("RELEASE_BACKWARD_MAX_STEPS", release)
-        self.assertIn('"release_capture_corridor"', release)
+        self.assertIn("minimum_geom_clearance", release)
+        self.assertLess(
+            release.index('self.ct.grip_cmd["l"]'),
+            release.index("self.move_mount_commands_delta"),
+        )
+        self.assertIn("RELEASE_CLEARANCE_LIFT_M", release)
+        before_open = release[:release.index('self.ct.grip_cmd["l"]')]
+        after_open = release[release.index('self.ct.grip_cmd["l"]'):]
+        self.assertNotIn(
+            'checks["resting_on_integrated_top_tier_geometry"]',
+            before_open,
+        )
+        self.assertNotIn(
+            'checks["supported_by_integrated_top_tier"]',
+            before_open,
+        )
+        self.assertNotIn(
+            'checks["center_inside_integrated_top_tier"]',
+            before_open,
+        )
+        self.assertIn(
+            'after_checks["resting_on_integrated_top_tier_geometry"]',
+            after_open,
+        )
+        self.assertNotIn("RELEASE_BACKWARD_WITHDRAWAL_M", release)
+        self.assertNotIn("RELEASE_RECENTER_MAX_M", release)
+        self.assertNotIn("SLOT_CAPTURE_HALF_WIDTH", release)
 if __name__ == "__main__":
     unittest.main()

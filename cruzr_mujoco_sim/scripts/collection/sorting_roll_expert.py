@@ -30,10 +30,14 @@ from cruzr_s2_sdk_contract import (
 from sorting_roll_scene import (
     TARGET_AXIS as SCENE_TARGET_AXIS,
     TARGET_CENTER as SCENE_TARGET_CENTER,
+    TOP_TIER_BACK_INNER_X_M,
+    TOP_TIER_FRONT_LIP_PEAK_Z_M,
+    TOP_TIER_FRONT_LIP_X_M,
+    TOP_TIER_TROUGH_TOP_Z_M,
 )
 
 
-TASK_VERSION = "sorting_roll_v7"
+TASK_VERSION = "sorting_roll_v8"
 POLICY_CAMERAS = tuple(SDK_CAMERAS)
 REVIEW_ONLY_CAMERAS = ("stereo_right",)
 RECORDED_CAMERAS = (
@@ -49,12 +53,10 @@ TARGET_CENTER = np.array(SCENE_TARGET_CENTER, dtype=float, copy=True)
 TARGET_AXIS = np.array(SCENE_TARGET_AXIS, dtype=float, copy=True)
 ROLL_HALF_LENGTH = 0.25
 ROLL_RADIUS = 0.012
-SLOT_HALF_WIDTH = 0.015
-SLOT_CAPTURE_HALF_WIDTH = 0.030
-# The outer faces of both 15 mm guards span +/-30 mm about the slot center.
+HELD_MIN_ROLL_Z_M = TOP_TIER_TROUGH_TOP_Z_M + 0.008
 TABLE_OBSERVATION_XY = np.array([0.0, -0.22])
 TABLE_GRASP_XY = np.array([0.0, -0.47])
-SHELF_STAGE_OFFSET_X = -0.0325
+SHELF_STAGE_OFFSET_X = -0.050
 TABLE_CLEAR_REVERSE_M = 0.22
 FLAT_PICK_TARGET_ALONG_M = 0.160
 FLAT_PICK_TIP_BIAS_Y_M = 0.034
@@ -96,20 +98,15 @@ PRE_RELEASE_Y_TOLERANCE_M = 0.003
 PRE_RELEASE_ENDPOINT_MARGIN_M = 0.020
 ARM_RETRACT_M = 0.082
 HAND_FLAT_ROLL_Z = 1.240
-RELEASE_ROLL_Z = 1.128
 RELEASE_APPROACH_Y_BIAS_M = 0.000
-RELEASE_PRE_TOUCH_X_M = 0.7850
-RELEASE_TOUCH_STEP_M = 0.0001
-RELEASE_TOUCH_MAX_STEPS = 40
-RELEASE_TOUCH_MIN_FORCE_N = 0.02
-RELEASE_TOUCH_MAX_FORCE_N = 5.0
-RELEASE_RECENTER_MAX_M = 0.006
-RELEASE_RECENTER_MIN_INNER_FIT_M = 0.001
+RELEASE_CLEARANCE_ROLL_Z = 0.955
+RELEASE_GUARDED_DROP_Z_M = 0.951
+RELEASE_INSERT_TARGET_X_M = float(TARGET_CENTER[0]) + 0.040
+RELEASE_DROP_MAX_M = 0.025
+RELEASE_PAD_SHELF_CLEARANCE_MIN_M = 0.002
 RELEASE_WRIST_LEVEL_DEG = 4.0
-RELEASE_TIP_REGRASP_X_M = {"l": -0.004, "r": -0.004}
-RELEASE_TIP_REGRASP_STAGE_X_M = 0.750
-RELEASE_INSERT_STEP_M = 0.008
-RELEASE_BACKWARD_WITHDRAWAL_M = 0.024
+RELEASE_INSERT_STEP_M = 0.006
+RELEASE_CLEARANCE_LIFT_M = 0.050
 RELEASE_PAD_SLIDING_FRICTION = 1.0
 RELEASE_FRICTION_SETTLE_TICKS = 12
 GRASP_YAW_DEG = 14.0
@@ -135,8 +132,8 @@ FLAT_REGRASP_HEIGHT_RESTORE_ATTEMPTS = 4
 FLAT_REGRASP_LEVEL_MAX_STEP_M = 0.004
 FLAT_REGRASP_LEVEL_TARGET_AXIS_Z = 0.010
 FLAT_REGRASP_LEVEL_ATTEMPTS = 4
-SLOT_AXIS_ARM_MAX_STEP_M = 0.004
-SLOT_AXIS_ARM_ATTEMPTS = 4
+ENTRY_AXIS_ARM_MAX_STEP_M = 0.004
+ENTRY_AXIS_ARM_ATTEMPTS = 4
 INSERT_AXIS_X_SAFETY_LIMIT = 0.0012
 INSERT_AXIS_Z_SAFETY_LIMIT = 0.02
 INSERT_AXIS_CORRECTION_MAX_STEP_M = 0.001
@@ -144,7 +141,7 @@ INSERT_AXIS_CORRECTION_MIN_CLEARANCE_M = 0.008
 EMPTY_HAND_SERVO_MAX_STEP_RAD = 0.012
 ONE_HAND_SUPPORT_DROP_TOLERANCE_M = 0.025
 IK_ROTATION_TOLERANCE_DEG = 5.0
-SLOT_X_COMMAND_BIAS = -0.0003
+ENTRY_X_COMMAND_BIAS = -0.0003
 RELEASE_GRIP_RATE = 0.035
 BASE_ACCEL = 0.8
 BASE_YAW_ACCEL = 0.6
@@ -161,8 +158,8 @@ ARM_SERVO_MIN_TICKS = 18
 ARM_SERVO_SETTLE_TICKS = 12
 GRASP_SETTLE_TICKS = 60
 RELEASE_OPEN_TICKS = 60
-SLOT_VISUAL_REVIEW_CAMERA = (0.72, -45.0, -50.0)
-SLOT_PHYSICS_REVIEW_CAMERA = (0.72, 180.0, -60.0)
+SLOT_VISUAL_REVIEW_CAMERA = (0.85, -45.0, -45.0)
+SLOT_PHYSICS_REVIEW_CAMERA = (0.85, -45.0, -45.0)
 
 
 class ExpertFailure(RuntimeError):
@@ -645,16 +642,44 @@ def roll_half_extent_x(axis_x):
     )
 
 
-def cylinder_slot_fit_margin(center_x, axis_x):
+def integrated_depth_margin(center_x, axis_x):
     half_x = roll_half_extent_x(axis_x)
-    center_error = abs(float(center_x) - float(TARGET_CENTER[0]))
-    return SLOT_HALF_WIDTH - half_x - center_error
+    center_x = float(center_x)
+    return min(
+        center_x - half_x - TOP_TIER_FRONT_LIP_X_M,
+        TOP_TIER_BACK_INNER_X_M - center_x - half_x,
+    )
 
 
-def cylinder_capture_margin(center_x, axis_x):
-    half_x = roll_half_extent_x(axis_x)
-    center_error = abs(float(center_x) - float(TARGET_CENTER[0]))
-    return SLOT_CAPTURE_HALF_WIDTH - half_x - center_error
+def guarded_release_is_ready(roll_clearance, pad_clearance):
+    return bool(
+        0.0 <= float(roll_clearance) <= RELEASE_DROP_MAX_M
+        and float(pad_clearance)
+        >= RELEASE_PAD_SHELF_CLEARANCE_MIN_M
+    )
+
+
+def guarded_release_geometry_is_ready(
+    endpoint_margins,
+    axis_error_deg,
+    depth_margin,
+):
+    return bool(
+        min(float(value) for value in endpoint_margins.values())
+        >= PRE_RELEASE_ENDPOINT_MARGIN_M
+        and float(axis_error_deg) <= 5.0
+        and float(depth_margin) >= 0.005
+    )
+
+
+def resolved_geom_clearance(raw_distance, witness_distance, has_contact):
+    raw_distance = float(raw_distance)
+    witness_distance = float(witness_distance)
+    if has_contact or raw_distance < 0.0:
+        return min(raw_distance, 0.0)
+    if raw_distance == 0.0 and witness_distance > 0.0:
+        return witness_distance
+    return raw_distance
 
 
 def insertion_axis_is_safe(roll_axis):
@@ -681,6 +706,7 @@ def parse_args(argv=None):
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
+    parser.add_argument("--no-render", action="store_true")
     args = parser.parse_args(argv)
     if args.seed < 1:
         parser.error("--seed must be positive")
@@ -789,14 +815,7 @@ class SortingRollExpert:
         self.roll_body = ct.bid("sorting_roll")
         self.roll_geom = ct.gid("sorting_roll_col")
         self.shelf_visual_geom = ct.gid("sorting_shelf_visual")
-        self.slot_visual_geom_ids = {
-            ct.gid(name)
-            for name in (
-                "target_slot_floor_visual",
-                "target_slot_front_guard_visual",
-                "target_slot_back_guard_visual",
-            )
-        }
+        self.slot_visual_geom_ids = set()
         self.roll_joint = ct.jid("sorting_roll_free")
         self.roll_qpos_adr = int(self.model.jnt_qposadr[self.roll_joint])
         self.roll_dof_adr = int(self.model.jnt_dofadr[self.roll_joint])
@@ -815,8 +834,13 @@ class SortingRollExpert:
                 "roll_support_x_positive_far_lip_col",
             )
         }
-        self.release_touch_geom_ids = {
-            ct.gid("target_middle_bar_col")
+        self.integrated_support_geom_ids = {
+            ct.gid(name)
+            for name in (
+                "shelf_top_front_lip_col",
+                "shelf_top_trough_col",
+                "shelf_top_back_slope_col",
+            )
         }
         self.shelf_geom_ids = {
             ct.gid(name)
@@ -825,11 +849,13 @@ class SortingRollExpert:
                 "shelf_post_front_right_col",
                 "shelf_post_rear_left_col",
                 "shelf_post_rear_right_col",
-                "target_slot_floor_col",
-                "target_slot_front_guard_col",
-                "target_slot_back_guard_col",
-                "target_middle_bar_col",
-                "target_top_bar_col",
+                "shelf_tier1_col",
+                "shelf_tier2_col",
+                "shelf_tier3_col",
+                "shelf_top_front_lip_col",
+                "shelf_top_trough_col",
+                "shelf_top_back_slope_col",
+                "shelf_top_back_panel_col",
             )
         }
         self.arm_geom_ids = {}
@@ -853,7 +879,6 @@ class SortingRollExpert:
         self.gates = {}
         self.final_evidence = None
         self.sim_seconds = 0.0
-        self.release_contact_monitor = None
 
         self.out.mkdir(parents=True)
         self.review_dir.mkdir(parents=True)
@@ -869,7 +894,7 @@ class SortingRollExpert:
             "metadata": {
                 "task_version": TASK_VERSION,
                 "seed": args.seed,
-                "collection_profile": "sorting_roll_canary_v7_coordinated_pick",
+                "collection_profile": "sorting_roll_canary_v8_integrated_shelf",
                 "training_eligible": False,
                 "success_source": "sorting_roll_task.SortingRollSuccessTracker",
                 "policy_cameras": list(POLICY_CAMERAS),
@@ -893,12 +918,12 @@ class SortingRollExpert:
                 ),
                 "review_camera": "free_camera_azimuth_45_not_policy_input",
                 "slot_visual_review_camera": (
-                    "free_camera_azimuth_-45_elevation_-50_"
-                    "visible_geometry_not_policy_input"
+                    "free_camera_azimuth_-45_elevation_-45_"
+                    "integrated_shelf_visible_geometry_not_policy_input"
                 ),
                 "slot_physics_review_camera": (
-                    "free_camera_azimuth_180_elevation_-60_"
-                    "collision_geometry_not_policy_input"
+                    "free_camera_azimuth_-45_elevation_-45_"
+                    "integrated_shelf_collision_geometry_not_policy_input"
                 ),
                 "release_pad_sliding_friction": (
                     RELEASE_PAD_SLIDING_FRICTION
@@ -919,7 +944,7 @@ class SortingRollExpert:
 
         self.slot_visual_review_camera = mujoco.MjvCamera()
         self.slot_visual_review_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-        self.slot_visual_review_camera.lookat[:] = [0.7825, 0.0, 1.015]
+        self.slot_visual_review_camera.lookat[:] = TARGET_CENTER
         (
             self.slot_visual_review_camera.distance,
             self.slot_visual_review_camera.azimuth,
@@ -927,7 +952,7 @@ class SortingRollExpert:
         ) = SLOT_VISUAL_REVIEW_CAMERA
         self.slot_physics_review_camera = mujoco.MjvCamera()
         self.slot_physics_review_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-        self.slot_physics_review_camera.lookat[:] = [0.7825, 0.0, 1.015]
+        self.slot_physics_review_camera.lookat[:] = TARGET_CENTER
         (
             self.slot_physics_review_camera.distance,
             self.slot_physics_review_camera.azimuth,
@@ -946,27 +971,6 @@ class SortingRollExpert:
         self.ct.control_step(substeps)
         dt = float(substeps) * float(self.model.opt.timestep)
         self.sim_seconds += dt
-        if self.release_contact_monitor is not None:
-            pad_contact = self.contact_evidence(
-                self.pad_ids, self.shelf_geom_ids
-            )
-            monitor = self.release_contact_monitor
-            if pad_contact["force_n"] > monitor["maximum_pad_force"]:
-                monitor["maximum_pad_force"] = pad_contact["force_n"]
-                monitor["maximum_pad_pairs"] = pad_contact["pairs"]
-            roll_x = float(self.roll_position()[0])
-            monitor["minimum_roll_x"] = min(
-                monitor["minimum_roll_x"], roll_x
-            )
-            monitor["maximum_roll_x"] = max(
-                monitor["maximum_roll_x"], roll_x
-            )
-            capture_margin = cylinder_capture_margin(
-                roll_x, float(self.roll_axis()[0])
-            )
-            monitor["minimum_capture_margin"] = min(
-                monitor["minimum_capture_margin"], capture_margin
-            )
         if self.recorder.n != previous:
             self.recorded_roll_qpos.append(
                 self.data.qpos[self.roll_qpos_adr:self.roll_qpos_adr + 7].copy()
@@ -1057,6 +1061,83 @@ class SortingRollExpert:
                 ),
             ])
         return {"force_n": total, "pairs": pairs}
+
+    def arm_shelf_contacts(self):
+        all_arm = self.arm_geom_ids["l"] | self.arm_geom_ids["r"]
+        contacts = []
+        for index in range(self.data.ncon):
+            geom1 = int(self.data.contact[index].geom1)
+            geom2 = int(self.data.contact[index].geom2)
+            if not (
+                (geom1 in all_arm and geom2 in self.shelf_geom_ids)
+                or (geom2 in all_arm and geom1 in self.shelf_geom_ids)
+            ):
+                continue
+            contacts.append({
+                "pair": [self.geom_label(geom1), self.geom_label(geom2)],
+                "penetration_mm": round(
+                    -1000.0 * min(
+                        0.0, float(self.data.contact[index].dist)
+                    ),
+                    3,
+                ),
+            })
+        return contacts
+
+    def minimum_geom_clearance(self, first_ids, second_ids):
+        active_pairs = set()
+        for index in range(self.data.ncon):
+            contact = self.data.contact[index]
+            active_pairs.add(frozenset((
+                int(contact.geom1),
+                int(contact.geom2),
+            )))
+        best = None
+        for first in sorted(first_ids):
+            for second in sorted(second_ids):
+                fromto = np.zeros(6, dtype=float)
+                raw_distance = float(self.mujoco.mj_geomDistance(
+                    self.model,
+                    self.data,
+                    int(first),
+                    int(second),
+                    0.25,
+                    fromto,
+                ))
+                witness_distance = float(np.linalg.norm(
+                    fromto[3:] - fromto[:3]
+                ))
+                has_contact = (
+                    frozenset((int(first), int(second))) in active_pairs
+                )
+                distance = resolved_geom_clearance(
+                    raw_distance,
+                    witness_distance,
+                    has_contact,
+                )
+                if best is None or distance < best["distance_m"]:
+                    best = {
+                        "distance_m": distance,
+                        "raw_distance_m": raw_distance,
+                        "witness_distance_m": witness_distance,
+                        "active_contact": has_contact,
+                        "pair": [
+                            self.geom_label(first),
+                            self.geom_label(second),
+                        ],
+                        "fromto_m": np.round(fromto, 6).tolist(),
+                    }
+        if best is None:
+            raise RuntimeError("geom clearance requires non-empty sets")
+        return best
+
+
+    def require_arms_clear_shelf(self, label):
+        contacts = self.arm_shelf_contacts()
+        if contacts:
+            raise ExpertFailure(
+                f"arm-shelf collision phase={label} contacts={contacts}"
+            )
 
     def geom_label(self, geom):
         name = self.mujoco.mj_id2name(
@@ -1290,11 +1371,64 @@ class SortingRollExpert:
         self.mujoco.mj_forward(self.model, self.data)
         return targets, residuals, rotation_residuals
 
+    def validate_shelf_arm_path(self, targets, label):
+        saved_qpos = self.data.qpos.copy()
+        saved_qvel = self.data.qvel.copy()
+        starts = {
+            hand: self.ct.qtgt[hand].copy()
+            for hand in ("l", "r")
+        }
+        distance = max(
+            float(np.max(np.abs(targets[hand] - starts[hand])))
+            for hand in ("l", "r")
+        )
+        steps = cosine_steps(
+            distance,
+            FLAT_REGRASP_COLLISION_STEP_RAD,
+            minimum=2,
+        )
+        collision = None
+        try:
+            for index in range(steps + 1):
+                blend = 0.5 - 0.5 * math.cos(
+                    math.pi * index / steps
+                )
+                for hand, arm in (("l", self.ct.L), ("r", self.ct.R)):
+                    configuration = (
+                        starts[hand]
+                        + (targets[hand] - starts[hand]) * blend
+                    )
+                    for address, value in zip(arm.qadr, configuration):
+                        self.data.qpos[address] = value
+                self.mujoco.mj_forward(self.model, self.data)
+                contacts = self.arm_shelf_contacts()
+                if contacts:
+                    collision = {
+                        "sample": index,
+                        "samples": steps,
+                        "contacts": contacts,
+                    }
+                    break
+        finally:
+            self.data.qpos[:] = saved_qpos
+            self.data.qvel[:] = saved_qvel
+            self.mujoco.mj_forward(self.model, self.data)
+        if collision is not None:
+            raise ExpertFailure(
+                f"shelf arm path collision phase={label} "
+                f"evidence={collision}"
+            )
+        print(
+            f"[shelf_path:{label}] PASS samples={steps + 1}",
+            flush=True,
+        )
+
     def servo_arms(
         self,
         targets,
         max_step=ARM_SERVO_MAX_STEP_RAD,
         minimum=ARM_SERVO_MIN_TICKS,
+        shelf_safe=False,
     ):
         distance = max(
             float(np.max(np.abs(targets[hand] - self.ct.qtgt[hand])))
@@ -1310,7 +1444,14 @@ class SortingRollExpert:
                 )
             self.ct.base_vel[:] = 0.0
             self.frames(1)
-        self.frames(ARM_SERVO_SETTLE_TICKS)
+            if shelf_safe:
+                self.require_arms_clear_shelf(self.ct.REC["phase"])
+        if shelf_safe:
+            for _ in range(ARM_SERVO_SETTLE_TICKS):
+                self.frames(1)
+                self.require_arms_clear_shelf(self.ct.REC["phase"])
+        else:
+            self.frames(ARM_SERVO_SETTLE_TICKS)
 
     def wait_arm_tracking(
         self,
@@ -1318,6 +1459,7 @@ class SortingRollExpert:
         tolerance=ARM_TRACK_TOL_RAD,
         collision_free_hand=None,
         collision_free_hands=(),
+        shelf_safe=False,
     ):
         stable_ticks = 0
         error = float("inf")
@@ -1332,6 +1474,8 @@ class SortingRollExpert:
                         f"moving arm collision phase={label} "
                         f"hand={collision_hand} contacts={contacts}"
                     )
+            if shelf_safe:
+                self.require_arms_clear_shelf(label)
             error = max(
                 abs(float(self.data.qpos[address]) - float(target))
                 for hand, arm in (("l", self.ct.L), ("r", self.ct.R))
@@ -1356,6 +1500,7 @@ class SortingRollExpert:
         iterations=240,
         solve_base_pose=None,
         tracking_tolerance=ARM_TRACK_TOL_RAD,
+        shelf_safe=False,
     ):
         targets, residuals, rotation_residuals = self.solve_mounts(
             positions,
@@ -1379,10 +1524,16 @@ class SortingRollExpert:
                 for hand in ("l", "r")
             ),
         )
-        self.servo_arms(targets)
+        if shelf_safe:
+            self.validate_shelf_arm_path(
+                targets,
+                self.ct.REC["phase"],
+            )
+        self.servo_arms(targets, shelf_safe=shelf_safe)
         self.wait_arm_tracking(
             self.ct.REC["phase"],
             tolerance=tracking_tolerance,
+            shelf_safe=shelf_safe,
         )
 
     def solve_one_mount_target(
@@ -1816,7 +1967,7 @@ class SortingRollExpert:
             f"{CONTROL_FPS * max_command_delta:.4f}",
         )
 
-    def move_mounts_delta(self, delta):
+    def move_mounts_delta(self, delta, shelf_safe=False):
         delta = np.asarray(delta, dtype=float)
         steps = max(1, int(math.ceil(float(np.linalg.norm(delta)) / 0.02)))
         for _ in range(steps):
@@ -1829,7 +1980,12 @@ class SortingRollExpert:
                 "l": self.data.xmat[self.ct.L.mount].reshape(3, 3).copy(),
                 "r": self.data.xmat[self.ct.R.mount].reshape(3, 3).copy(),
             }
-            self.move_mounts(positions, rotations, iterations=300)
+            self.move_mounts(
+                positions,
+                rotations,
+                iterations=300,
+                shelf_safe=shelf_safe,
+            )
 
     def commanded_mount_poses(self):
         saved_qpos = self.data.qpos.copy()
@@ -1851,15 +2007,23 @@ class SortingRollExpert:
         self.mujoco.mj_forward(self.model, self.data)
         return positions, rotations
 
-    def move_mount_commands_delta(self, delta):
+    def move_mount_commands_delta(self, delta, shelf_safe=False):
         delta = np.asarray(delta, dtype=float)
-        self.move_mount_command_deltas({"l": delta, "r": delta})
+        self.move_mount_command_deltas(
+            {"l": delta, "r": delta},
+            shelf_safe=shelf_safe,
+        )
 
-    def move_mount_command_deltas(self, deltas):
+    def move_mount_command_deltas(self, deltas, shelf_safe=False):
         positions, rotations = self.commanded_mount_poses()
         for hand in ("l", "r"):
             positions[hand] += np.asarray(deltas[hand], dtype=float)
-        self.move_mounts(positions, rotations, iterations=300)
+        self.move_mounts(
+            positions,
+            rotations,
+            iterations=300,
+            shelf_safe=shelf_safe,
+        )
 
     def require_held(self, stage, minimum_force=GRIP_FORCE_MIN_N):
         recovery_ticks = 0
@@ -1872,7 +2036,7 @@ class SortingRollExpert:
                 and right["force_n"] >= minimum_force
                 and len(left["pads"]) == 2
                 and len(right["pads"]) == 2
-                and position[2] >= 1.055
+                and position[2] >= HELD_MIN_ROLL_Z_M
             )
             if held or recovery_ticks >= HOLD_CONTACT_RECOVERY_TICKS:
                 break
@@ -2426,13 +2590,15 @@ class SortingRollExpert:
         command_space=False,
         max_step=0.02,
         attempts=12,
+        shelf_safe=False,
+        require_held_stage=None,
     ):
         target = np.asarray(target, dtype=float)
         tolerance = np.asarray(tolerance, dtype=float)
         command_target = target.copy()
         if command_bias is not None:
             command_target += np.asarray(command_bias, dtype=float)
-        for _ in range(attempts):
+        for attempt in range(attempts):
             error = target - self.roll_position()
             if np.all(np.abs(error) <= tolerance):
                 break
@@ -2442,7 +2608,14 @@ class SortingRollExpert:
                 if command_space
                 else self.move_mounts_delta
             )
-            move_delta(bounded_vector(command_error, max_step))
+            move_delta(
+                bounded_vector(command_error, max_step),
+                shelf_safe=shelf_safe,
+            )
+            if require_held_stage is not None:
+                self.require_held(
+                    f"{require_held_stage}_{attempt + 1:02d}"
+                )
         error = target - self.roll_position()
         self.gate(
             gate_name,
@@ -2456,25 +2629,10 @@ class SortingRollExpert:
         axis = self.data.xmat[self.roll_body].reshape(3, 3)[:, 0].copy()
         return -axis if axis[1] < 0.0 else axis
 
-    def slot_fit_margin(self):
-        return cylinder_slot_fit_margin(
+    def current_integrated_depth_margin(self):
+        return integrated_depth_margin(
             self.roll_position()[0], self.roll_axis()[0]
         )
-
-    def insertion_axis_correction_clearances(self):
-        obstacle_min_x = min(
-            float(self.ct.geom_aabb(geom)[0][0])
-            for geom in self.release_touch_geom_ids
-        )
-        roll_max_x = float(
-            self.roll_position()[0]
-            + roll_half_extent_x(self.roll_axis()[0])
-        )
-        pad_max_x = max(
-            float(self.ct.geom_aabb(geom)[1][0])
-            for geom in self.pad_ids
-        )
-        return obstacle_min_x - roll_max_x, obstacle_min_x - pad_max_x
 
     def align_roll_axis(self, held_stage, gate_name):
         for _ in range(5):
@@ -2498,9 +2656,10 @@ class SortingRollExpert:
         self,
         held_stage,
         gate_name,
-        max_step=SLOT_AXIS_ARM_MAX_STEP_M,
+        max_step=ENTRY_AXIS_ARM_MAX_STEP_M,
+        shelf_safe=False,
     ):
-        for _ in range(SLOT_AXIS_ARM_ATTEMPTS):
+        for _ in range(ENTRY_AXIS_ARM_ATTEMPTS):
             axis = self.roll_axis()
             if (
                 abs(float(axis[0])) <= 0.0008
@@ -2514,10 +2673,10 @@ class SortingRollExpert:
                 TARGET_AXIS,
                 max_step,
             )
-            self.move_mount_command_deltas({
-                "l": left_delta,
-                "r": -left_delta,
-            })
+            self.move_mount_command_deltas(
+                {"l": left_delta, "r": -left_delta},
+                shelf_safe=shelf_safe,
+            )
             self.require_held(held_stage)
         axis = self.roll_axis()
         self.gate(
@@ -2527,7 +2686,7 @@ class SortingRollExpert:
             f"axis={np.round(axis, 6).tolist()}",
         )
 
-    def slowly_insert_roll(
+    def slowly_enter_integrated_top_tier(
         self,
         target,
         max_step=0.004,
@@ -2540,14 +2699,27 @@ class SortingRollExpert:
             PRE_RELEASE_Y_TOLERANCE_M,
             0.002,
         ])
+        axis = self.roll_axis()
+        roll_bottom_z = (
+            float(self.roll_position()[2])
+            - roll_half_extent_x(float(axis[2]))
+        )
+        lip_clearance = roll_bottom_z - TOP_TIER_FRONT_LIP_PEAK_Z_M
+        self.gate(
+            "front_lip_clearance_before_entry",
+            lip_clearance >= 0.025,
+            f"roll_bottom_z={roll_bottom_z:.6f} "
+            f"lip_peak_z={TOP_TIER_FRONT_LIP_PEAK_Z_M:.6f} "
+            f"clearance_mm={1000.0 * lip_clearance:.2f}",
+        )
         command_target = target + np.array([
-            SLOT_X_COMMAND_BIAS,
+            ENTRY_X_COMMAND_BIAS,
             0.0,
             0.0,
         ])
         steps_taken = 0
         max_steps = max(
-            24,
+            12,
             int(math.ceil(
                 float(np.linalg.norm(
                     command_target - self.roll_position()
@@ -2562,60 +2734,32 @@ class SortingRollExpert:
                 bounded_vector(
                     command_target - self.roll_position(),
                     max_step,
-                )
+                ),
+                shelf_safe=True,
             )
             steps_taken += 1
-            self.require_held("slow_insert_step")
-            pad_contact = self.contact_evidence(
-                self.pad_ids, self.shelf_geom_ids
-            )
-            self.gate(
-                "grippers_clear_during_insert",
-                pad_contact["force_n"] <= 0.2,
-                f"force_n={pad_contact['force_n']:.4f} "
-                f"pairs={pad_contact['pairs']}",
-            )
+            self.require_held("integrated_top_tier_entry")
             axis = self.roll_axis()
-            if not insertion_axis_is_safe(axis):
-                roll_clearance, pad_clearance = (
-                    self.insertion_axis_correction_clearances()
-                )
-                self.gate(
-                    "slot_axis_correction_clearance",
-                    insertion_axis_correction_has_clearance(
-                        roll_clearance, pad_clearance
-                    ),
-                    f"roll_clearance_mm={1000.0 * roll_clearance:.2f} "
-                    f"pad_clearance_mm={1000.0 * pad_clearance:.2f}",
-                )
-                self.align_roll_axis_with_arms(
-                    "correcting_slot_axis_during_insert",
-                    "slot_axis_during_insert",
-                    max_step=INSERT_AXIS_CORRECTION_MAX_STEP_M,
-                )
-                pad_contact = self.contact_evidence(
-                    self.pad_ids, self.shelf_geom_ids
-                )
-                self.gate(
-                    "grippers_clear_after_insert_axis_correction",
-                    pad_contact["force_n"] <= 0.2,
-                    f"force_n={pad_contact['force_n']:.4f} "
-                    f"pairs={pad_contact['pairs']}",
-                )
-                axis = self.roll_axis()
             self.gate(
-                "slot_axis_safe_during_insert",
+                "axis_safe_during_integrated_entry",
                 insertion_axis_is_safe(axis),
                 f"axis={np.round(axis, 6).tolist()}",
             )
         error = target - self.roll_position()
         self.gate(
-            "slow_insert_alignment",
+            "integrated_entry_alignment",
             np.all(np.abs(error) <= tolerance),
             f"steps={steps_taken} "
             f"target={np.round(target, 4).tolist()} "
             f"actual={np.round(self.roll_position(), 4).tolist()} "
             f"error_mm={np.round(1000.0 * error, 1).tolist()}",
+        )
+        depth_margin = self.current_integrated_depth_margin()
+        self.gate(
+            "inside_integrated_top_tier_depth",
+            depth_margin >= 0.005,
+            f"depth_margin_mm={1000.0 * depth_margin:.2f} "
+            f"roll={np.round(self.roll_position(), 6).tolist()}",
         )
 
     def level_release_support_surfaces(self):
@@ -2640,7 +2784,12 @@ class SortingRollExpert:
                 target_rotation,
             )
             rotations[hand] = target_rotation
-        self.move_mounts(positions, rotations, iterations=400)
+        self.move_mounts(
+            positions,
+            rotations,
+            iterations=400,
+            shelf_safe=True,
+        )
         self.require_held("levelling_release_support_surfaces")
         spans = self.pad_vertical_span()
         self.gate(
@@ -2653,71 +2802,7 @@ class SortingRollExpert:
             }),
         )
 
-    def regrasp_at_release_tips(self):
-        for hand, support in (("r", "l"), ("l", "r")):
-            self.phase(f"release_{hand}_for_tip_regrasp")
-            self.ct.grip_cmd[hand] = self.ct.GRIP_OPEN
-            self.frames(GRASP_SETTLE_TICKS)
-            self.require_hand_held(
-                support, f"supporting_{hand}_tip_regrasp"
-            )
-
-            self.phase(f"shift_{hand}_to_release_tip")
-            deltas = {"l": np.zeros(3), "r": np.zeros(3)}
-            deltas[hand][0] = RELEASE_TIP_REGRASP_X_M[hand]
-            self.move_mount_command_deltas(deltas)
-
-            self.phase(f"regrasp_{hand}_at_release_tip")
-            self.ct.grip_cmd[hand] = self.ct.GRIP_CLOSE
-            self.frames(120)
-            self.require_held(f"{hand}_release_tip_regrasp")
-
-    def advance_until_gentle_touch(self):
-        roll_contact = {"force_n": 0.0, "pairs": []}
-        steps_taken = 0
-        for _ in range(RELEASE_TOUCH_MAX_STEPS):
-            roll_contact = self.contact_evidence(
-                {self.roll_geom}, self.release_touch_geom_ids
-            )
-            if roll_contact["force_n"] >= RELEASE_TOUCH_MIN_FORCE_N:
-                break
-            self.move_mount_commands_delta([
-                RELEASE_TOUCH_STEP_M,
-                0.0,
-                0.0,
-            ])
-            steps_taken += 1
-            self.require_held("gentle_touch_advance")
-            pad_contact = self.contact_evidence(
-                self.pad_ids, self.shelf_geom_ids
-            )
-            self.gate(
-                "grippers_clear_during_gentle_touch",
-                pad_contact["force_n"] <= 0.2,
-                f"force_n={pad_contact['force_n']:.4f} "
-                f"pairs={pad_contact['pairs']}",
-            )
-        roll_contact = self.contact_evidence(
-            {self.roll_geom}, self.release_touch_geom_ids
-        )
-        self.gate(
-            "gentle_roll_touch",
-            RELEASE_TOUCH_MIN_FORCE_N
-            <= roll_contact["force_n"]
-            <= RELEASE_TOUCH_MAX_FORCE_N,
-            f"steps={steps_taken} force_n={roll_contact['force_n']:.4f} "
-            f"pairs={roll_contact['pairs']}",
-        )
-        return roll_contact
-
-    def release_with_backward_withdrawal(self):
-        self.release_contact_monitor = {
-            "maximum_pad_force": 0.0,
-            "maximum_pad_pairs": [],
-            "minimum_roll_x": float("inf"),
-            "maximum_roll_x": -float("inf"),
-            "minimum_capture_margin": float("inf"),
-        }
+    def release_into_integrated_top_tier(self):
         for geom in self.pad_ids:
             self.model.geom_friction[geom, 0] = (
                 RELEASE_PAD_SLIDING_FRICTION
@@ -2728,127 +2813,116 @@ class SortingRollExpert:
             flush=True,
         )
         self.frames(RELEASE_FRICTION_SETTLE_TICKS)
-        self.require_held("release_friction_transition")
-        pad_contact = self.contact_evidence(
-            self.pad_ids, self.shelf_geom_ids
-        )
-        self.gate(
-            "grippers_clear_after_release_friction_transition",
-            pad_contact["force_n"] <= 0.2,
-            f"force_n={pad_contact['force_n']:.4f} "
-            f"pairs={pad_contact['pairs']}",
-        )
-        roll_contact = self.contact_evidence(
-            {self.roll_geom}, self.release_touch_geom_ids
-        )
-        self.gate(
-            "gentle_touch_preserved_before_release_recenter",
-            RELEASE_TOUCH_MIN_FORCE_N
-            <= roll_contact["force_n"]
-            <= RELEASE_TOUCH_MAX_FORCE_N,
-            f"force_n={roll_contact['force_n']:.4f} "
-            f"pairs={roll_contact['pairs']}",
-        )
-        release_recenter_delta_x = (
-            float(TARGET_CENTER[0])
-            - float(self.roll_position()[0])
-        )
-        self.gate(
-            "release_recenter_plan",
-            abs(release_recenter_delta_x) <= RELEASE_RECENTER_MAX_M,
-            f"delta_mm={1000.0 * release_recenter_delta_x:.3f} "
-            f"target_x={float(TARGET_CENTER[0]):.6f}",
-        )
-        self.move_mount_commands_delta([
-            release_recenter_delta_x,
-            0.0,
-            0.0,
-        ])
-        self.require_held("release_recentered")
+        self.require_held("guarded_release_friction_transition")
 
-        position = self.roll_position()
-        axis = self.roll_axis()
-        inner_fit_margin = self.slot_fit_margin()
-        capture_margin = cylinder_capture_margin(
-            float(position[0]),
-            float(axis[0]),
-        )
-        roll_contact = self.contact_evidence(
-            {self.roll_geom}, self.release_touch_geom_ids
-        )
+        before_release = self.evaluate_placement(self.model, self.data)
+        depth_margin = self.current_integrated_depth_margin()
         pad_contact = self.contact_evidence(
             self.pad_ids, self.shelf_geom_ids
         )
-        self.gate(
-            "release_recentered_inside_slot",
-            abs(float(position[0]) - float(TARGET_CENTER[0]))
-            <= 0.001
-            and inner_fit_margin
-            >= RELEASE_RECENTER_MIN_INNER_FIT_M
-            and capture_margin >= 0.001
-            and insertion_axis_is_safe(axis)
-            and roll_contact["force_n"] <= 0.05
-            and pad_contact["force_n"] <= 0.2,
-            f"position={np.round(position, 6).tolist()} "
-            f"axis={np.round(axis, 6).tolist()} "
-            f"inner_fit_margin_mm={1000.0 * inner_fit_margin:.3f} "
-            f"capture_margin_mm={1000.0 * capture_margin:.3f} "
-            f"roll_touch_force_n={roll_contact['force_n']:.4f} "
-            f"pad_force_n={pad_contact['force_n']:.4f} "
-            f"pad_pairs={pad_contact['pairs']}",
+        arm_shelf_contacts = self.arm_shelf_contacts()
+        roll_clearance = self.minimum_geom_clearance(
+            {self.roll_geom}, self.integrated_support_geom_ids
         )
+        pad_clearance = self.minimum_geom_clearance(
+            self.pad_ids, self.shelf_geom_ids
+        )
+        endpoint_margins = before_release["endpoint_margin_m"]
+        self.gates["guarded_release_evidence"] = {
+            "placement": before_release,
+            "roll_support_clearance": roll_clearance,
+            "pad_shelf_clearance": pad_clearance,
+            "arm_shelf_contacts": arm_shelf_contacts,
+        }
+        self.gate(
+            "guarded_release_ready",
+            guarded_release_geometry_is_ready(
+                endpoint_margins,
+                before_release["axis_error_deg"],
+                depth_margin,
+            )
+            and not arm_shelf_contacts
+            and pad_contact["force_n"] <= 0.2
+            and guarded_release_is_ready(
+                roll_clearance["distance_m"],
+                pad_clearance["distance_m"],
+            ),
+            f"center={before_release['center_m']} "
+            f"axis_error_deg={before_release['axis_error_deg']} "
+            f"endpoint_margins={endpoint_margins} "
+            f"depth_margin_mm={1000.0 * depth_margin:.2f} "
+            f"trough_gap_mm="
+            f"{1000.0 * before_release['roll_bottom_to_trough_gap_m']:.3f} "
+            f"roll_support_clearance_mm="
+            f"{1000.0 * roll_clearance['distance_m']:.3f} "
+            f"roll_pair={roll_clearance['pair']} "
+            f"pad_shelf_clearance_mm="
+            f"{1000.0 * pad_clearance['distance_m']:.3f} "
+            f"pad_pair={pad_clearance['pair']} "
+            f"pad_raw_mm="
+            f"{1000.0 * pad_clearance['raw_distance_m']:.3f} "
+            f"pad_witness_mm="
+            f"{1000.0 * pad_clearance['witness_distance_m']:.3f} "
+            f"pad_active_contact={pad_clearance['active_contact']} "
+            f"pad_shelf_force_n={pad_contact['force_n']:.4f}",
+        )
+
+        start_mount_z = float(np.mean([
+            self.data.xpos[self.ct.L.mount, 2],
+            self.data.xpos[self.ct.R.mount, 2],
+        ]))
         self.ct.GRIP_RATE = RELEASE_GRIP_RATE
         self.ct.grip_cmd["l"] = self.ct.GRIP_OPEN
         self.ct.grip_cmd["r"] = self.ct.GRIP_OPEN
-        self.frames(RELEASE_OPEN_TICKS)
+        self.move_mount_commands_delta(
+            [0.0, 0.0, RELEASE_CLEARANCE_LIFT_M],
+            shelf_safe=True,
+        )
+        for _ in range(RELEASE_OPEN_TICKS):
+            self.frames(1)
+            self.require_arms_clear_shelf(
+                "guarded_release_open_settle"
+            )
 
-        self.move_mount_commands_delta([
-            -RELEASE_BACKWARD_WITHDRAWAL_M,
-            0.0,
-            0.0,
-        ])
-        left = self.grip_evidence("L")
-        right = self.grip_evidence("R")
-        inner_fit_margin = self.slot_fit_margin()
-        print(
-            "[release_continuous_backward_withdrawal] "
-            f"distance_mm={1000.0 * RELEASE_BACKWARD_WITHDRAWAL_M:.1f} "
-            f"roll={np.round(self.roll_position(), 6).tolist()} "
-            f"inner_fit_margin_mm={1000.0 * inner_fit_margin:.3f} "
-            f"left={left['force_n']:.3f}N/{left['pads']} "
-            f"right={right['force_n']:.3f}N/{right['pads']}",
-            flush=True,
+        end_mount_z = float(np.mean([
+            self.data.xpos[self.ct.L.mount, 2],
+            self.data.xpos[self.ct.R.mount, 2],
+        ]))
+        lift = end_mount_z - start_mount_z
+        contacts = self.arm_shelf_contacts()
+        self.gate(
+            "open_hands_lifted_clear_of_integrated_tier",
+            lift >= RELEASE_CLEARANCE_LIFT_M - 0.005
+            and not contacts,
+            f"lifted_mm={1000.0 * lift:.1f} contacts={contacts}",
         )
 
         left = self.grip_evidence("L")
         right = self.grip_evidence("R")
-        monitor = self.release_contact_monitor
-        self.release_contact_monitor = None
         self.gate(
-            "released_by_continuous_backward_withdrawal",
+            "released_during_guarded_lift",
             not left["pads"]
             and not right["pads"]
             and left["force_n"] <= 0.05
             and right["force_n"] <= 0.05,
-            f"distance_mm={1000.0 * RELEASE_BACKWARD_WITHDRAWAL_M:.1f} "
             f"left={left['force_n']:.3f}N/{left['pads']} "
             f"right={right['force_n']:.3f}N/{right['pads']}",
         )
+        after_open = self.evaluate_placement(self.model, self.data)
+        after_checks = after_open["checks"]
+        self.gates["post_open_support_evidence"] = after_open
         self.gate(
-            "release_capture_corridor",
-            monitor["minimum_capture_margin"] >= 0.0,
-            "minimum_capture_margin_mm="
-            f"{1000.0 * monitor['minimum_capture_margin']:.3f} "
-            f"final_inner_fit_margin_mm={1000.0 * inner_fit_margin:.3f}",
+            "rod_remains_in_integrated_top_tier_after_open",
+            after_checks["center_inside_integrated_top_tier"]
+            and after_checks["fully_inside_shelf_width"]
+            and after_checks["axis_aligned_with_shelf"]
+            and after_checks["supported_by_integrated_top_tier"]
+            and after_checks["resting_on_integrated_top_tier_geometry"]
+            and after_checks["released_from_both_grippers"],
+            json.dumps(after_open, ensure_ascii=False),
         )
-        self.gate(
-            "grippers_clear_during_release",
-            monitor["maximum_pad_force"] <= 0.2,
-            f"max_force_n={monitor['maximum_pad_force']:.4f} "
-            f"pairs={monitor['maximum_pad_pairs']} "
-            f"roll_x_range=[{monitor['minimum_roll_x']:.4f}, "
-            f"{monitor['maximum_roll_x']:.4f}]",
-        )
+        self.gates["post_open_hand_lift_evidence"] = after_open
+
 
     def track_success(self, ticks=240):
         tracker = self.tracker_cls()
@@ -3180,10 +3254,10 @@ class SortingRollExpert:
         )
         self.require_held("shelf_park")
 
-        self.phase("align_slot_axis_above_shelf")
+        self.phase("align_shelf_axis_above_front_lip")
         self.align_roll_axis(
-            "aligning_slot_axis_above_shelf",
-            "slot_axis_x_above_shelf",
+            "aligning_shelf_axis_above_front_lip",
+            "shelf_axis_x_above_front_lip",
         )
 
         self.phase("realign_shelf_stage_after_axis")
@@ -3194,162 +3268,106 @@ class SortingRollExpert:
             command_space=True,
             max_step=0.02,
             attempts=12,
+            shelf_safe=True,
         )
         self.require_held("axis_aligned_high_stage")
-
-        self.phase("lower_near_top_slot")
-        low_stage = stage_center.copy()
-        low_stage[2] = RELEASE_ROLL_Z
-        self.align_roll_center(
-            low_stage,
-            "low_stage_alignment",
-            [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
-            command_space=True,
-            max_step=0.02,
-            attempts=16,
-        )
-        self.require_held("low_stage")
 
         self.phase("level_release_support_surfaces")
         self.level_release_support_surfaces()
         self.align_roll_center(
-            low_stage,
+            stage_center,
             "after_release_surface_leveling",
             [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
             command_space=True,
             max_step=0.004,
             attempts=8,
+            shelf_safe=True,
         )
         self.require_held("release_surfaces_levelled")
 
-        self.phase("position_grip_at_release_edge")
-        self.regrasp_at_release_tips()
+        self.phase("fine_align_axis_before_entry")
+        self.align_roll_axis_with_arms(
+            "fine_aligning_integrated_entry_axis",
+            "integrated_entry_axis_alignment",
+            shelf_safe=True,
+        )
         self.align_roll_center(
-            low_stage,
-            "after_release_edge_positioning",
+            stage_center,
+            "high_stage_centered_before_entry",
             [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
             command_space=True,
             max_step=0.004,
             attempts=8,
+            shelf_safe=True,
         )
-        self.require_held("release_edge_positioned")
+        self.require_held("integrated_entry_axis_ready")
 
-        insert_target = low_stage.copy()
-        insert_target[0] = RELEASE_PRE_TOUCH_X_M
-
-        self.phase("fine_align_slot_axis_before_insert")
-        self.align_roll_axis_with_arms(
-            "fine_aligning_slot_axis",
-            "slot_axis_fine_alignment",
-        )
-
-        self.phase("recenter_low_stage_before_insert")
+        self.phase("lower_to_front_lip_clearance")
+        clearance_target = stage_center.copy()
+        clearance_target[2] = RELEASE_CLEARANCE_ROLL_Z
         self.align_roll_center(
-            low_stage,
-            "low_stage_recentered",
+            clearance_target,
+            "front_lip_clearance_height",
             [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
             command_space=True,
-            max_step=0.006,
-            attempts=6,
+            max_step=0.02,
+            attempts=20,
+            shelf_safe=True,
+            require_held_stage="front_lip_clearance_lowering",
         )
-        self.require_held("low_stage_recentered")
+        self.require_held("front_lip_clearance_height")
 
-        self.phase("verify_slot_axis_before_insert")
-        insert_axis = self.roll_axis()
-        self.gate(
-            "slot_axis_ready_for_insert",
-            abs(float(insert_axis[0])) <= 0.0008
-            and abs(float(insert_axis[2])) <= 0.02,
-            f"axis={np.round(insert_axis, 6).tolist()}",
-        )
-
-        insert_start_x = float(self.roll_position()[0])
-        self.phase("slow_forward_insert")
-        self.slowly_insert_roll(
-            insert_target,
+        entry_target = clearance_target.copy()
+        entry_target[0] = RELEASE_INSERT_TARGET_X_M
+        entry_start_x = float(self.roll_position()[0])
+        self.phase("move_over_integrated_front_lip")
+        self.slowly_enter_integrated_top_tier(
+            entry_target,
             max_step=RELEASE_INSERT_STEP_M,
         )
-        self.require_held("inserted_over_slot")
-        insert_end_x = float(self.roll_position()[0])
-        forward_insert_distance = insert_end_x - insert_start_x
+        self.require_held("inside_integrated_top_tier")
+        entry_end_x = float(self.roll_position()[0])
+        forward_entry_distance = entry_end_x - entry_start_x
         self.gate(
-            "forward_insert_motion",
-            forward_insert_distance >= 0.025,
-            f"start_x={insert_start_x:.6f} "
-            f"end_x={insert_end_x:.6f} "
-            f"distance_mm={1000.0 * forward_insert_distance:.2f}",
+            "forward_entry_motion",
+            forward_entry_distance >= 0.045,
+            f"start_x={entry_start_x:.6f} "
+            f"end_x={entry_end_x:.6f} "
+            f"distance_mm={1000.0 * forward_entry_distance:.2f}",
         )
 
-        fit_margin = self.slot_fit_margin()
-        self.gate(
-            "pre_touch_slot_fit",
-            fit_margin >= 0.00005,
-            f"fit_margin_mm={1000.0 * fit_margin:.3f}",
+        self.phase("position_guarded_release_clearance")
+        guarded_release_target = entry_target.copy()
+        guarded_release_target[2] = RELEASE_GUARDED_DROP_Z_M
+        self.align_roll_center(
+            guarded_release_target,
+            "guarded_release_height",
+            [0.001, PRE_RELEASE_Y_TOLERANCE_M, 0.001],
+            command_space=True,
+            max_step=0.006,
+            attempts=16,
+            shelf_safe=True,
+            require_held_stage="guarded_release_lowering",
         )
-        final_axis = self.roll_axis()
-        self.gate(
-            "final_slot_axis_x",
-            insertion_axis_is_safe(final_axis),
-            f"axis={np.round(final_axis, 6).tolist()}",
-        )
+        self.require_held("guarded_release_height")
 
-        self.phase("gentle_touch_shelf")
-        self.advance_until_gentle_touch()
-
-        self.phase("position_above_top_slot_for_release")
-        self.gate(
-            "release_height_ready",
-            abs(float(self.roll_position()[2]) - RELEASE_ROLL_Z) <= 0.002,
-            f"target_roll_z={RELEASE_ROLL_Z:.4f} "
-            f"actual_roll_z={self.roll_position()[2]:.4f}",
-        )
-
-        before_release = self.evaluate_placement(self.model, self.data)
-        self.gates["pre_release_evidence"] = before_release
-        self.gate(
-            "pre_release_y_centered",
-            abs(
-                float(self.roll_position()[1])
-                - RELEASE_APPROACH_Y_BIAS_M
-            )
-            <= PRE_RELEASE_Y_TOLERANCE_M,
-            f"target_y_mm={1000.0 * RELEASE_APPROACH_Y_BIAS_M:.2f} "
-            f"actual_y_mm={1000.0 * self.roll_position()[1]:.2f}",
-        )
-        endpoint_margins = before_release["endpoint_margin_m"]
-        self.gate(
-            "pre_release_endpoint_margins",
-            min(endpoint_margins.values())
-            >= PRE_RELEASE_ENDPOINT_MARGIN_M,
-            f"margins_mm={json.dumps({side: round(1000.0 * margin, 2) for side, margin in endpoint_margins.items()})}",
-        )
-        self.gate(
-            "pre_release_axis_alignment",
-            before_release["axis_error_deg"] <= 5.0,
-            f"axis_error_deg={before_release['axis_error_deg']}",
-        )
-
-        self.phase("release")
+        self.phase("guarded_release_and_lift_open_hands")
         print(
             f"[release] gripper_rate={RELEASE_GRIP_RATE:.3f}m/s "
-            f"backward_mm={1000.0 * RELEASE_BACKWARD_WITHDRAWAL_M:.1f} "
-            "then withdraw both hands backward",
+            "with bounded drop and simultaneous upward hand clearance",
             flush=True,
         )
-        self.release_with_backward_withdrawal()
+        self.release_into_integrated_top_tier()
 
-        self.phase("verify_before_retract")
-        pre_retract_evidence = self.track_success()
-        self.gates["pre_retract_evidence"] = pre_retract_evidence
+        self.phase("verify_after_guarded_release")
+        post_release_evidence = self.track_success()
+        self.gates["post_guarded_release_evidence"] = post_release_evidence
         self.gate(
-            "placed_before_retract",
-            pre_retract_evidence is not None
-            and pre_retract_evidence.get("instantaneous_success") is True
-            and pre_retract_evidence.get("stable_seconds", 0.0) >= 0.5,
-            json.dumps(
-                pre_retract_evidence,
-                ensure_ascii=False,
-            ),
+            "placed_after_guarded_release",
+            post_release_evidence is not None
+            and post_release_evidence.get("instantaneous_success") is True
+            and post_release_evidence.get("stable_seconds", 0.0) >= 0.5,
+            json.dumps(post_release_evidence, ensure_ascii=False),
         )
 
         self.phase("retract_arms_after_release")
@@ -3371,6 +3389,7 @@ class SortingRollExpert:
             retract_positions,
             retract_rotations,
             iterations=400,
+            shelf_safe=True,
         )
         end_mount_x = float(np.mean([
             self.data.xpos[self.ct.L.mount, 0],
@@ -3382,7 +3401,8 @@ class SortingRollExpert:
         self.gate(
             "arms_retracted",
             start_mount_x - end_mount_x >= 0.08
-            and pad_contact["force_n"] <= 0.2,
+            and pad_contact["force_n"] <= 0.2
+            and not self.arm_shelf_contacts(),
             f"retracted_mm={1000.0 * (start_mount_x - end_mount_x):.1f} "
             f"shelf_contact_n={pad_contact['force_n']:.4f} "
             f"pairs={pad_contact['pairs']}",
@@ -3610,6 +3630,8 @@ def main(argv=None):
         evaluate_placement,
         SortingRollSuccessTracker,
     )
+    if args.no_render:
+        ct.REC["on"] = False
     success = False
     error = None
     try:

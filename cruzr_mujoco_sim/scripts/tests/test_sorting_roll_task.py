@@ -12,31 +12,84 @@ if CORE not in sys.path:
 
 from sorting_roll_task import (
     INSTANTANEOUS_CHECKS,
-    SLOT_FLOOR_GAP_TOLERANCE_M,
+    TOP_TIER_TROUGH_GAP_TOLERANCE_M,
     SortingRollSuccessTracker,
     axis_alignment_degrees,
+    evaluate_placement,
     fit_report,
 )
 
+import sorting_roll_scene as scene
+
 
 class SortingRollTaskTest(unittest.TestCase):
-    def test_roll_and_visual_geometry_have_positive_slot_clearance(self):
+    @classmethod
+    def setUpClass(cls):
+        import mujoco
+
+        cls.mujoco = mujoco
+        scene.materialize_scene()
+        cls.model = mujoco.MjModel.from_xml_path(str(scene.SCENE_PATH))
+        cls.roll_joint = mujoco.mj_name2id(
+            cls.model,
+            mujoco.mjtObj.mjOBJ_JOINT,
+            "sorting_roll_free",
+        )
+
+    @classmethod
+    def placement_evidence(cls, position):
+        data = cls.mujoco.MjData(cls.model)
+        qpos_adr = int(cls.model.jnt_qposadr[cls.roll_joint])
+        data.qpos[qpos_adr:qpos_adr + 3] = position
+        data.qpos[qpos_adr + 3:qpos_adr + 7] = [
+            np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)
+        ]
+        cls.mujoco.mj_forward(cls.model, data)
+        return evaluate_placement(cls.model, data)
+
+    def test_roll_fits_integrated_top_tier(self):
         report = fit_report()
         self.assertTrue(report["simulation_fits"], report)
         self.assertAlmostEqual(report["length_clearance_total_m"], 0.070)
         self.assertAlmostEqual(report["length_clearance_each_end_m"], 0.035)
-        self.assertAlmostEqual(report["simulated_slot_clearance_m"], 0.006)
-        self.assertAlmostEqual(report["physical_nominal_slot_clearance_m"], 0.005)
-        self.assertAlmostEqual(report["middle_bar_vertical_clearance_m"], 0.095)
-        self.assertTrue(
-            report["checks"]["physical_nominal_has_positive_slot_clearance"]
+        self.assertAlmostEqual(report["roll_to_shelf_width_ratio"], 0.5 / 0.57)
+        self.assertAlmostEqual(report["integrated_pocket_depth_m"], 0.1045)
+        self.assertAlmostEqual(
+            report["pocket_depth_clearance_m"],
+            0.1045 - 0.025,
         )
-    def test_success_contract_requires_physical_slot_floor_contact(self):
+        self.assertAlmostEqual(report["front_lip_rise_m"], 0.027)
+        self.assertNotIn("slot_clear_width_m", report)
+        self.assertTrue(
+            report["checks"]["roll_length_ratio_is_80_to_90_percent"]
+        )
+
+    def test_success_contract_requires_integrated_multi_point_support(self):
         self.assertIn(
-            "resting_on_slot_floor_geometry",
+            "resting_on_integrated_top_tier_geometry",
             INSTANTANEOUS_CHECKS,
         )
-        self.assertAlmostEqual(SLOT_FLOOR_GAP_TOLERANCE_M, 0.002)
+        self.assertAlmostEqual(TOP_TIER_TROUGH_GAP_TOLERANCE_M, 0.002)
+
+    def test_old_external_target_is_rejected(self):
+        evidence = self.placement_evidence([0.7825, 0.0, 1.0125])
+        self.assertFalse(
+            evidence["checks"]["center_inside_integrated_top_tier"]
+        )
+        self.assertFalse(
+            evidence["checks"]["supported_by_integrated_top_tier"]
+        )
+        self.assertFalse(evidence["instantaneous_success"])
+
+    def test_floating_inside_shelf_is_rejected(self):
+        evidence = self.placement_evidence([0.950, 0.0, 0.950])
+        self.assertFalse(
+            evidence["checks"]["supported_by_integrated_top_tier"]
+        )
+        self.assertFalse(
+            evidence["checks"]["resting_on_integrated_top_tier_geometry"]
+        )
+        self.assertFalse(evidence["instantaneous_success"])
 
 
     def test_axis_alignment_accepts_both_slot_directions(self):

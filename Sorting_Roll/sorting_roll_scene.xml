@@ -86,36 +86,25 @@
     <geom name="shelf_tier3_col" type="box" pos="1.000 0 0.715"
           size="0.190 0.300 0.0075" group="3" contype="1" conaffinity="3"
           friction="1.1 0.01 0.001"/>
-    <geom name="shelf_tier4_col" type="box" pos="1.005 0 0.995"
-          size="0.195 0.300 0.005" group="3" contype="1" conaffinity="3"
-          friction="1.2 0.02 0.001"/>
-
-    <!-- Top-tier 30 mm U-slot. Its visible liner and collision geoms share the
-         same pose and dimensions so a physically supported roll never looks airborne. -->
-    <geom name="target_slot_floor_col" type="box" pos="0.7825 0 0.995"
-          size="0.0150 0.285 0.005" group="3" contype="1" conaffinity="3"
-          friction="1.35 0.02 0.001"/>
-    <geom name="target_slot_front_guard_col" type="box" pos="0.7600 0 1.025"
-          size="0.0075 0.285 0.025" group="3" contype="1" conaffinity="3"
-          friction="1.2 0.02 0.001"/>
-    <geom name="target_slot_back_guard_col" type="box" pos="0.8050 0 1.025"
-          size="0.0075 0.285 0.025" group="3" contype="1" conaffinity="3"
-          friction="1.2 0.02 0.001"/>
-    <geom name="target_slot_floor_visual" type="box" pos="0.7825 0 0.995"
-          size="0.0150 0.285 0.005" group="1" contype="0" conaffinity="0"
-          density="0" rgba="0.12 0.22 0.32 1"/>
-    <geom name="target_slot_front_guard_visual" type="box" pos="0.7600 0 1.025"
-          size="0.0075 0.285 0.025" group="1" contype="0" conaffinity="0"
-          density="0" rgba="0.12 0.22 0.32 1"/>
-    <geom name="target_slot_back_guard_visual" type="box" pos="0.8050 0 1.025"
-          size="0.0075 0.285 0.025" group="1" contype="0" conaffinity="0"
-          density="0" rgba="0.12 0.22 0.32 1"/>
-    <geom name="target_middle_bar_col" type="box" pos="0.810 0 1.130"
-          size="0.0125 0.285 0.010" group="3" contype="1" conaffinity="3"/>
-    <geom name="target_top_bar_col" type="box" pos="0.810 0 1.190"
-          size="0.0125 0.285 0.010" group="3" contype="1" conaffinity="3"/>
-    <site name="sorting_roll_target" type="box" pos="0.7825 0 1.0125"
-          size="0.018 0.255 0.018" rgba="0.10 0.85 0.25 0.20" group="4"/>
+    <!-- The top target is the shelf's own basket-like tier, not an external
+         U-slot. These hidden primitives follow the visual mesh center section:
+         front retaining lip, lowest trough, rear incline, and back panel. -->
+    <geom name="shelf_top_front_lip_col" type="box"
+          pos="0.9345 0 0.9005" size="0.013729530 0.285 0.0025"
+          quat="0.879280325 0 0.476304640 0"
+          group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"/>
+    <geom name="shelf_top_trough_col" type="box"
+          pos="0.950 0 0.884" size="0.010 0.285 0.004"
+          group="3" contype="1" conaffinity="3" friction="1.35 0.02 0.001"/>
+    <geom name="shelf_top_back_slope_col" type="box"
+          pos="0.9955 0 0.9185" size="0.047712682 0.285 0.0025"
+          quat="0.944974752 0 -0.327143268 0"
+          group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"/>
+    <geom name="shelf_top_back_panel_col" type="box"
+          pos="1.035 0 1.010" size="0.0035 0.285 0.064"
+          group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"/>
+    <site name="sorting_roll_target" type="box" pos="0.950 0 0.900"
+          size="0.020 0.255 0.018" rgba="0.10 0.85 0.25 0.20" group="4"/>
 
     <!-- Table visual: 0.60 m along world X, 0.52 m along world Y, 1.00 m high. -->
     <!-- Rotated 180 deg about world Z, around the table-top center. -->

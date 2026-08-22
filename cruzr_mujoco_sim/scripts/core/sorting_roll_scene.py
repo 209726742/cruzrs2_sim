@@ -33,7 +33,14 @@ ROLL_SPAWN = np.array([
     - TABLE_DEPTH_M * ROLL_DEPTH_FRACTION_FROM_ROBOT_SIDE,
     ROLL_SUPPORT_TOP_Z_M + ROLL_RADIUS_M + 0.0015,
 ])
-TARGET_CENTER = np.array([0.7825, 0.0, 1.0125])
+TOP_TIER_FRONT_LIP_X_M = 0.927
+TOP_TIER_FRONT_LIP_PEAK_Z_M = 0.915
+TOP_TIER_TROUGH_CENTER_X_M = 0.950
+TOP_TIER_TROUGH_TOP_Z_M = 0.888
+TOP_TIER_BACK_INNER_X_M = 1.0315
+TARGET_CENTER = np.array([
+    TOP_TIER_TROUGH_CENTER_X_M, 0.0, TOP_TIER_TROUGH_TOP_Z_M + ROLL_RADIUS_M
+])
 TARGET_AXIS = np.array([0.0, 1.0, 0.0])
 EXPECTED_EDGE_GAP_M = 0.475
 
@@ -90,7 +97,12 @@ def layout_report():
             ROLL_SUPPORT_X_M - ROLL_SUPPORT_HALF_X_M >= 0.19
             and ROLL_SUPPORT_X_M + ROLL_SUPPORT_HALF_X_M <= ROLL_SIZE[0] / 2.0
         ),
-        "target_is_top_tier": bool(1.0 <= TARGET_CENTER[2] <= 1.2),
+        "target_is_integrated_top_tier": bool(
+            SHELF_BOUNDS[0, 0] <= TARGET_CENTER[0] <= SHELF_BOUNDS[1, 0]
+            and TOP_TIER_TROUGH_TOP_Z_M
+            <= TARGET_CENTER[2]
+            <= TOP_TIER_FRONT_LIP_PEAK_Z_M + ROLL_RADIUS_M
+        ),
         "target_axis_is_shelf_width": bool(np.allclose(TARGET_AXIS, [0.0, 1.0, 0.0])),
     }
     return {
@@ -106,6 +118,7 @@ def layout_report():
             float(roll_depth_from_robot_side / TABLE_DEPTH_M)
         ),
         "target_center_m": TARGET_CENTER.tolist(),
+        "top_tier_trough_top_z_m": TOP_TIER_TROUGH_TOP_Z_M,
         "edge_gap_m": float(edge_gap),
         "checks": checks,
     }
@@ -226,6 +239,8 @@ def render_preview(
     distance=3.35,
     azimuth=42,
     elevation=-24,
+    scene_option=None,
+    hidden_geom_ids=(),
 ):
     import imageio.v3 as iio
     import mujoco
@@ -239,10 +254,22 @@ def render_preview(
     camera.azimuth = azimuth
     camera.elevation = elevation
     renderer = mujoco.Renderer(model, height=720, width=1280)
+    original_alphas = {
+        int(geom_id): float(model.geom_rgba[int(geom_id), 3])
+        for geom_id in hidden_geom_ids
+    }
     try:
-        renderer.update_scene(data, camera=camera)
+        for geom_id in original_alphas:
+            model.geom_rgba[geom_id, 3] = 0.0
+        renderer.update_scene(
+            data,
+            camera=camera,
+            scene_option=scene_option,
+        )
         iio.imwrite(output_path, renderer.render())
     finally:
+        for geom_id, alpha in original_alphas.items():
+            model.geom_rgba[geom_id, 3] = alpha
         renderer.close()
     return output_path
 
@@ -286,7 +313,16 @@ def main(argv=None):
         "target_placement": target,
     }
     if args.render:
-        initial_preview = render_preview(model, data, args.render)
+        import mujoco
+
+        visual_option = mujoco.MjvOption()
+        visual_option.geomgroup[3] = 0
+        initial_preview = render_preview(
+            model,
+            data,
+            args.render,
+            scene_option=visual_option,
+        )
         target_preview = initial_preview.with_name(
             initial_preview.stem + "_target" + initial_preview.suffix
         )
@@ -294,14 +330,38 @@ def main(argv=None):
             model,
             target_data,
             target_preview,
-            lookat=(0.90, 0.0, 1.03),
-            distance=1.15,
-            azimuth=42,
-            elevation=-12,
+            lookat=(0.96, 0.0, 0.92),
+            distance=0.85,
+            azimuth=-45,
+            elevation=-45,
+            scene_option=visual_option,
+        )
+        physics_preview = initial_preview.with_name(
+            initial_preview.stem + "_target_physics" + initial_preview.suffix
+        )
+        physics_option = mujoco.MjvOption()
+        physics_option.geomgroup[3] = 1
+        shelf_visual = _object_id(
+            mujoco,
+            model,
+            mujoco.mjtObj.mjOBJ_GEOM,
+            "sorting_shelf_visual",
+        )
+        render_preview(
+            model,
+            target_data,
+            physics_preview,
+            lookat=(0.96, 0.0, 0.92),
+            distance=0.85,
+            azimuth=-45,
+            elevation=-45,
+            scene_option=physics_option,
+            hidden_geom_ids=(shelf_visual,),
         )
         report["preview"] = {
             "initial": str(initial_preview.resolve()),
             "target": str(target_preview.resolve()),
+            "target_physics": str(physics_preview.resolve()),
         }
     print(json.dumps(report, indent=2))
     passed = (

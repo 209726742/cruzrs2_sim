@@ -23,6 +23,7 @@ case "$MODE" in
   preview)
     PREVIEW_PATH=$WORKSPACE_ROOT/cruzr_mujoco_sim/out/sorting_roll/scene_preview.png
     MUJOCO_GL=${MUJOCO_GL:-egl} "$PYTHON_BIN" "$SCENE_TOOL" --render "$PREVIEW_PATH"
+    echo "目标物理对照图: ${PREVIEW_PATH%.png}_target_physics.png"
     echo "初始预览图: $PREVIEW_PATH"
     echo "目标预览图: ${PREVIEW_PATH%.png}_target.png"
     ;;
