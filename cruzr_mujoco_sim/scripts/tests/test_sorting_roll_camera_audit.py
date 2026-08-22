@@ -17,6 +17,7 @@ from sorting_roll_camera_audit import (
     principal_extent,
     project_points,
     sampled_indices,
+    wrist_observation_is_usable,
 )
 
 
@@ -69,6 +70,49 @@ class SortingRollCameraAuditTest(unittest.TestCase):
         self.assertEqual(report["covered"], 1)
         self.assertAlmostEqual(report["coverage_fraction"], 0.5)
         self.assertAlmostEqual(report["mean_usable_views"], 0.5)
+
+    def test_wrist_observation_uses_local_contact_evidence(self):
+        metrics = {"visible_pixels": 40}
+        self.assertTrue(wrist_observation_is_usable(
+            metrics,
+            hand_visible_pixels=20,
+            hand_reference_in_frame=True,
+            roll_contact_in_frame=True,
+            target_contact_in_frame=True,
+            placement_stage=True,
+        ))
+        self.assertFalse(wrist_observation_is_usable(
+            metrics,
+            hand_visible_pixels=20,
+            hand_reference_in_frame=True,
+            roll_contact_in_frame=True,
+            target_contact_in_frame=False,
+            placement_stage=True,
+        ))
+
+    def test_pickup_contact_requires_all_three_camera_roles(self):
+        records = [
+            {
+                "stage": "pickup_contact",
+                "phase": "grasp",
+                "frame": 1,
+                "camera": camera,
+                "role": role,
+                "usable": usable,
+            }
+            for camera, role, usable in (
+                ("head", "global", True),
+                ("left", "left_wrist", True),
+                ("right", "right_wrist", False),
+            )
+        ]
+        report = aggregate_candidate(records, ("head", "left", "right"))
+        self.assertEqual(report["covered"], 1)
+        self.assertEqual(report["required_role_covered"], 0)
+
+        records[-1]["usable"] = True
+        report = aggregate_candidate(records, ("head", "left", "right"))
+        self.assertEqual(report["required_role_covered"], 1)
 
 
 if __name__ == "__main__":

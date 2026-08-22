@@ -19,9 +19,30 @@ if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
 
 from cruzr_s2_sdk_contract import ARM_JOINT_NAMES, SDK_CAMERAS
+from sorting_roll_realsense_profile import (
+    CAMERA_ROLES as REALSENSE_CAMERA_ROLES,
+    MODEL_CAMERA_SOURCES as REALSENSE_CAMERA_SOURCES,
+    PROFILE_NAME as REALSENSE_PROFILE_NAME,
+    apply_model_camera_overrides,
+    profile_report as realsense_profile_report,
+)
 
 
 DEFAULT_SCENE = PACKAGE_ROOT / "assets" / "sorting_roll_scene.xml"
+CAMERA_SOURCES = {
+    "stereo_left": "stereo_left",
+    "stereo_right": "stereo_right",
+    "waist_front": "waist_front",
+    "chassis_front": "chassis_front",
+    **REALSENSE_CAMERA_SOURCES,
+}
+CAMERA_ROLES = {
+    "stereo_left": "global",
+    "stereo_right": "global",
+    "waist_front": "context",
+    "chassis_front": "navigation",
+    **REALSENSE_CAMERA_ROLES,
+}
 CAMERA_SETS = {
     "current_policy": tuple(SDK_CAMERAS),
     "manipulation_stereo": ("stereo_left", "stereo_right", "waist_front"),
@@ -31,6 +52,7 @@ CAMERA_SETS = {
         "waist_front",
         "chassis_front",
     ),
+    REALSENSE_PROFILE_NAME: tuple(REALSENSE_CAMERA_SOURCES),
 }
 STAGE_PHASES = {
     "pickup_observation": (
@@ -69,6 +91,14 @@ PLACEMENT_STAGES = {
     "insertion",
     "release_confirmation",
 }
+REQUIRED_ROLES_BY_STAGE = {
+    "pickup_observation": {"global"},
+    "pickup_contact": {"global", "left_wrist", "right_wrist"},
+    "transport": {"global"},
+    "placement_alignment": {"global", "left_wrist", "right_wrist"},
+    "insertion": {"global", "left_wrist", "right_wrist"},
+    "release_confirmation": {"global", "left_wrist", "right_wrist"},
+}
 TARGET_POINTS_M = np.asarray(
     [
         (0.950, 0.0, 0.912),
@@ -83,6 +113,8 @@ MIN_FULL_ROLL_PIXELS = 24
 MIN_VISIBLE_FRACTION = 0.50
 MIN_EXTENT_FRACTION = 0.70
 MIN_TARGET_IN_FRAME_FRACTION = 1.0
+MIN_WRIST_ROLL_PIXELS = 16
+MIN_WRIST_HAND_PIXELS = 8
 
 
 def phase_spans(phases):
@@ -178,6 +210,24 @@ def observation_is_usable(metrics, target_in_frame_fraction, placement_stage):
     )
 
 
+def wrist_observation_is_usable(
+    metrics,
+    *,
+    hand_visible_pixels,
+    hand_reference_in_frame,
+    roll_contact_in_frame,
+    target_contact_in_frame,
+    placement_stage,
+):
+    return bool(
+        metrics["visible_pixels"] >= MIN_WRIST_ROLL_PIXELS
+        and hand_visible_pixels >= MIN_WRIST_HAND_PIXELS
+        and hand_reference_in_frame
+        and roll_contact_in_frame
+        and (not placement_stage or target_contact_in_frame)
+    )
+
+
 def aggregate_candidate(records, cameras):
     grouped = {}
     for record in records:
@@ -194,11 +244,25 @@ def aggregate_candidate(records, cameras):
         )
         values = stage_totals.setdefault(
             stage,
-            {"samples": 0, "covered": 0, "usable_view_sum": 0},
+            {
+                "samples": 0,
+                "covered": 0,
+                "usable_view_sum": 0,
+                "required_roles_covered": 0,
+            },
         )
+        usable_roles = {
+            by_camera[camera].get("role")
+            for camera in cameras
+            if camera in by_camera and by_camera[camera]["usable"]
+        }
+        required_roles = REQUIRED_ROLES_BY_STAGE.get(stage, set())
         values["samples"] += 1
         values["covered"] += int(usable_count > 0)
         values["usable_view_sum"] += usable_count
+        values["required_roles_covered"] += int(
+            required_roles.issubset(usable_roles)
+        )
 
     stage_report = {}
     total_samples = total_covered = total_usable_views = 0
@@ -208,10 +272,17 @@ def aggregate_candidate(records, cameras):
             **values,
             "coverage_fraction": values["covered"] / samples,
             "mean_usable_views": values["usable_view_sum"] / samples,
+            "required_role_coverage_fraction": (
+                values["required_roles_covered"] / samples
+            ),
+            "required_roles": sorted(REQUIRED_ROLES_BY_STAGE.get(stage, set())),
         }
         total_samples += samples
         total_covered += values["covered"]
         total_usable_views += values["usable_view_sum"]
+    required_role_covered = sum(
+        values["required_roles_covered"] for values in stage_totals.values()
+    )
     return {
         "cameras": list(cameras),
         "samples": total_samples,
@@ -220,8 +291,48 @@ def aggregate_candidate(records, cameras):
         "mean_usable_views": (
             total_usable_views / total_samples if total_samples else 0.0
         ),
+        "required_role_covered": required_role_covered,
+        "required_role_coverage_fraction": (
+            required_role_covered / total_samples if total_samples else 0.0
+        ),
         "stage_report": stage_report,
     }
+
+
+def _subtree_geom_ids(model, root_body):
+    body_ids = {int(root_body)}
+    for body in range(model.nbody):
+        if int(model.body_parentid[body]) in body_ids:
+            body_ids.add(body)
+    return {
+        geom
+        for geom in range(model.ngeom)
+        if int(model.geom_bodyid[geom]) in body_ids
+    }
+
+
+def _wrist_reference_points(mujoco, model, data, roll_body):
+    roll_center = data.xpos[roll_body].copy()
+    roll_axis = data.xmat[roll_body].reshape(3, 3)[:, 0].copy()
+    references = {}
+    for role, side, target_y in (
+        ("left_wrist", "L", 0.250),
+        ("right_wrist", "R", -0.250),
+    ):
+        pad_ids = [
+            _named_id(mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, f"{side}_pad1"),
+            _named_id(mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, f"{side}_pad2"),
+        ]
+        hand_reference = np.mean(data.geom_xpos[pad_ids], axis=0)
+        along = float(np.clip(
+            (hand_reference - roll_center) @ roll_axis, -0.25, 0.25
+        ))
+        references[role] = {
+            "hand_reference": hand_reference,
+            "roll_contact": roll_center + along * roll_axis,
+            "target_contact": np.asarray((0.950, target_y, 0.912)),
+        }
+    return references
 
 
 def _named_id(mujoco, model, object_type, name):
@@ -290,6 +401,7 @@ def run_audit(args):
         raise RuntimeError(f"episode is missing critical phases: {missing_phases}")
 
     model = mujoco.MjModel.from_xml_path(str(args.scene))
+    apply_model_camera_overrides(mujoco, model)
     data = mujoco.MjData(model)
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
     renderer.enable_segmentation_rendering()
@@ -304,6 +416,25 @@ def run_audit(args):
         mujoco.mjtObj.mjOBJ_GEOM,
         "sorting_roll_visual",
     )
+    roll_body = _named_id(
+        mujoco,
+        model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        "sorting_roll",
+    )
+    hand_geom_ids = {
+        "left_wrist": _subtree_geom_ids(
+            model,
+            _named_id(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "L_pgc140_mount"),
+        ),
+        "right_wrist": _subtree_geom_ids(
+            model,
+            _named_id(mujoco, model, mujoco.mjtObj.mjOBJ_BODY, "R_pgc140_mount"),
+        ),
+    }
+    audit_cameras = tuple(dict.fromkeys(
+        camera for cameras in CAMERA_SETS.values() for camera in cameras
+    ))
     original_groups = model.geom_group.copy()
     records = []
     try:
@@ -312,17 +443,22 @@ def run_audit(args):
                 start, end = spans[phase]
                 for frame in sampled_indices(start, end, args.samples_per_phase):
                     _restore_frame(mujoco, model, data, episode, meta, frame)
-                    for camera in CAMERA_SETS["all_recorded"]:
+                    wrist_references = _wrist_reference_points(
+                        mujoco, model, data, roll_body
+                    )
+                    for camera in audit_cameras:
+                        source_camera = CAMERA_SOURCES[camera]
+                        role = CAMERA_ROLES[camera]
                         camera_id = _named_id(
                             mujoco,
                             model,
                             mujoco.mjtObj.mjOBJ_CAMERA,
-                            camera,
+                            source_camera,
                         )
                         model.geom_group[:] = original_groups
                         renderer.update_scene(
                             data,
-                            camera=camera,
+                            camera=source_camera,
                             scene_option=visible_option,
                         )
                         segmentation = renderer.render()
@@ -330,12 +466,24 @@ def run_audit(args):
                             (segmentation[:, :, 0] == roll_visual)
                             & (segmentation[:, :, 1] == int(mujoco.mjtObj.mjOBJ_GEOM))
                         )
+                        hand_visible_pixels = 0
+                        if role in hand_geom_ids:
+                            hand_visible_pixels = int(np.count_nonzero(
+                                np.isin(
+                                    segmentation[:, :, 0],
+                                    list(hand_geom_ids[role]),
+                                )
+                                & (
+                                    segmentation[:, :, 1]
+                                    == int(mujoco.mjtObj.mjOBJ_GEOM)
+                                )
+                            ))
 
                         model.geom_group[:] = 5
                         model.geom_group[roll_visual] = 0
                         renderer.update_scene(
                             data,
-                            camera=camera,
+                            camera=source_camera,
                             scene_option=isolated_option,
                         )
                         segmentation = renderer.render()
@@ -353,19 +501,57 @@ def run_audit(args):
                             args.height,
                         )
                         target_fraction = float(np.mean(target_in_frame))
+                        hand_reference_in_frame = None
+                        roll_contact_in_frame = None
+                        target_contact_in_frame = None
+                        if role in wrist_references:
+                            references = wrist_references[role]
+                            _, _, local_in_frame = project_points(
+                                data.cam_xpos[camera_id],
+                                data.cam_xmat[camera_id],
+                                np.asarray([
+                                    references["hand_reference"],
+                                    references["roll_contact"],
+                                    references["target_contact"],
+                                ]),
+                                float(model.cam_fovy[camera_id]),
+                                args.width,
+                                args.height,
+                            )
+                            (
+                                hand_reference_in_frame,
+                                roll_contact_in_frame,
+                                target_contact_in_frame,
+                            ) = (bool(value) for value in local_in_frame)
+                            usable = wrist_observation_is_usable(
+                                metrics,
+                                hand_visible_pixels=hand_visible_pixels,
+                                hand_reference_in_frame=hand_reference_in_frame,
+                                roll_contact_in_frame=roll_contact_in_frame,
+                                target_contact_in_frame=target_contact_in_frame,
+                                placement_stage=stage in PLACEMENT_STAGES,
+                            )
+                        else:
+                            usable = observation_is_usable(
+                                metrics,
+                                target_fraction,
+                                stage in PLACEMENT_STAGES,
+                            )
                         records.append({
                             "stage": stage,
                             "phase": phase,
                             "frame": int(frame),
                             "timestamp_s": float(episode["timestamp"][frame]),
                             "camera": camera,
+                            "model_camera": source_camera,
+                            "role": role,
                             **metrics,
                             "target_in_frame_fraction": target_fraction,
-                            "usable": observation_is_usable(
-                                metrics,
-                                target_fraction,
-                                stage in PLACEMENT_STAGES,
-                            ),
+                            "hand_visible_pixels": hand_visible_pixels,
+                            "hand_reference_in_frame": hand_reference_in_frame,
+                            "roll_contact_in_frame": roll_contact_in_frame,
+                            "target_contact_in_frame": target_contact_in_frame,
+                            "usable": usable,
                         })
     finally:
         model.geom_group[:] = original_groups
@@ -376,20 +562,25 @@ def run_audit(args):
         for name, cameras in CAMERA_SETS.items()
     }
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "screen_only_not_training_readiness": True,
         "episode": str(args.episode.resolve()),
         "scene": str(args.scene.resolve()),
         "resolution": [args.height, args.width],
         "samples_per_phase": args.samples_per_phase,
+        "realsense_profile": realsense_profile_report(),
         "thresholds": {
             "min_full_roll_pixels": MIN_FULL_ROLL_PIXELS,
             "min_visible_fraction": MIN_VISIBLE_FRACTION,
             "min_extent_fraction": MIN_EXTENT_FRACTION,
             "min_target_in_frame_fraction": MIN_TARGET_IN_FRAME_FRACTION,
+            "min_wrist_roll_pixels": MIN_WRIST_ROLL_PIXELS,
+            "min_wrist_hand_pixels": MIN_WRIST_HAND_PIXELS,
         },
         "limitations": [
             "SDK camera intrinsics and real CameraInfo remain unverified",
+            "RealSense wrist views use unverified simulation proxy mounts",
+            "left and right simulation proxy mounts are asymmetric",
             "screening visibility does not prove pi0.5 learnability",
             "simulator truth is used only to measure visibility, not as policy input",
         ],
