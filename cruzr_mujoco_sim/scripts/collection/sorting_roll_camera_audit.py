@@ -19,6 +19,7 @@ if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
 
 from cruzr_s2_sdk_contract import ARM_JOINT_NAMES, SDK_CAMERAS
+from sorting_roll_diversity import apply_model_diversity
 from sorting_roll_realsense_profile import (
     CAMERA_ROLES as REALSENSE_CAMERA_ROLES,
     MODEL_CAMERA_SOURCES as REALSENSE_CAMERA_SOURCES,
@@ -142,6 +143,21 @@ def sampled_indices(start, end, count):
         int(round(value))
         for value in np.linspace(start, end, min(count, end - start + 1))
     })
+
+
+def stage_phase_gaps(spans, stage_phases=STAGE_PHASES):
+    missing_stages = {
+        stage: list(phases)
+        for stage, phases in stage_phases.items()
+        if not any(phase in spans for phase in phases)
+    }
+    skipped_noop_phases = sorted({
+        phase
+        for phases in stage_phases.values()
+        for phase in phases
+        if phase not in spans
+    })
+    return missing_stages, skipped_noop_phases
 
 
 def principal_extent(mask):
@@ -391,18 +407,37 @@ def run_audit(args):
         episode = {name: payload[name] for name in payload.files}
     meta = json.loads(meta_path.read_text())
     spans = phase_spans(episode["phase"])
-    missing_phases = sorted({
-        phase
-        for phases in STAGE_PHASES.values()
-        for phase in phases
-        if phase not in spans
-    })
-    if missing_phases:
-        raise RuntimeError(f"episode is missing critical phases: {missing_phases}")
+    missing_stages, skipped_noop_phases = stage_phase_gaps(spans)
+    if missing_stages:
+        raise RuntimeError(
+            f"episode is missing critical stages: {missing_stages}"
+        )
 
     model = mujoco.MjModel.from_xml_path(str(args.scene))
     apply_model_camera_overrides(mujoco, model)
     data = mujoco.MjData(model)
+    replay_diversity = None
+    diversity = meta.get("diversity")
+    if diversity is not None:
+        if not isinstance(diversity, dict) or not isinstance(
+            diversity.get("assignment"), dict
+        ):
+            raise RuntimeError("episode diversity metadata is invalid")
+        replay_applied = apply_model_diversity(
+            mujoco,
+            model,
+            data,
+            diversity["assignment"],
+        )
+        if replay_applied != diversity.get("applied"):
+            raise RuntimeError(
+                "audit replay diversity does not match recorded metadata"
+            )
+        replay_diversity = {
+            "assignment_id": diversity["assignment"]["assignment_id"],
+            "applied": replay_applied,
+            "matches_recorded": True,
+        }
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
     renderer.enable_segmentation_rendering()
     visible_option = mujoco.MjvOption()
@@ -440,6 +475,8 @@ def run_audit(args):
     try:
         for stage, phases in STAGE_PHASES.items():
             for phase in phases:
+                if phase not in spans:
+                    continue
                 start, end = spans[phase]
                 for frame in sampled_indices(start, end, args.samples_per_phase):
                     _restore_frame(mujoco, model, data, episode, meta, frame)
@@ -568,6 +605,9 @@ def run_audit(args):
         "scene": str(args.scene.resolve()),
         "resolution": [args.height, args.width],
         "samples_per_phase": args.samples_per_phase,
+        "skipped_noop_phases": skipped_noop_phases,
+        "task_version": meta.get("task_version"),
+        "replay_diversity": replay_diversity,
         "realsense_profile": realsense_profile_report(),
         "thresholds": {
             "min_full_roll_pixels": MIN_FULL_ROLL_PIXELS,

@@ -304,6 +304,32 @@ class SortingRollExpertTest(unittest.TestCase):
             RANDOM_ROLL_YAW_LIMIT_RAD,
         )
 
+    def test_pose_bins_are_reproducible_and_cover_the_requested_range(self):
+        limits = np.asarray([
+            RANDOM_BASE_XY_LIMIT_M,
+            RANDOM_BASE_XY_LIMIT_M,
+            RANDOM_BASE_YAW_LIMIT_RAD,
+            RANDOM_ROLL_XY_LIMIT_M,
+            RANDOM_ROLL_XY_LIMIT_M,
+            RANDOM_ROLL_YAW_LIMIT_RAD,
+        ])
+        expected = {
+            "easy": (0.0, 0.40),
+            "medium": (0.40, 0.75),
+            "boundary": (0.75, 1.00),
+        }
+        for pose_bin, (lower, upper) in expected.items():
+            with self.subTest(pose_bin=pose_bin):
+                value = seed_randomization(37, pose_bin)
+                self.assertEqual(value, seed_randomization(37, pose_bin))
+                normalized = np.abs(np.asarray([
+                    *value["base_delta_xyyaw"],
+                    *value["roll_delta_xy_m"],
+                    value["roll_yaw_rad"],
+                ]) / limits)
+                self.assertLessEqual(float(normalized.max()), upper)
+                self.assertGreaterEqual(float(normalized.max()), lower)
+
     def test_v9_records_three_d405_candidate_policy_cameras(self):
         self.assertEqual(
             POLICY_CAMERAS,
@@ -716,6 +742,14 @@ class SortingRollExpertTest(unittest.TestCase):
             parse_args([
                 "--out", "invalid", "--no-render", "--review-videos",
             ])
+
+    def test_manifest_requires_scene_randomization(self):
+        with self.assertRaises(SystemExit):
+            parse_args(["--out", "invalid", "--manifest", "campaign.json"])
+        args = parse_args([
+            "--out", "candidate", "--randomize", "--manifest", "campaign.json",
+        ])
+        self.assertEqual(args.manifest, Path("campaign.json"))
 
     def test_finalize_synchronizes_nested_canary_eligibility(self):
         source = (

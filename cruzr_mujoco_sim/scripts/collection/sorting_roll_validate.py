@@ -18,10 +18,17 @@ from sorting_roll_realsense_profile import (  # noqa: E402
     POLICY_IMAGE_MAP,
     PROFILE_NAME,
 )
+from sorting_roll_diversity import (  # noqa: E402
+    DIVERSE_TASK_VERSION,
+    assignment_errors,
+    load_manifest,
+    manifest_counts,
+)
 
 
 TASK = "sorting_roll_cruzr"
 TASK_VERSION = "sorting_roll_v9_d405_sim"
+SUPPORTED_TASK_VERSIONS = (TASK_VERSION, DIVERSE_TASK_VERSION)
 FPS = 30
 MAX_CAMERA_STATE_SKEW_S = 0.020
 MIN_FRAMES = 51
@@ -125,14 +132,110 @@ def timestamp_errors(payload, num_frames):
     return errors
 
 
+def diversity_errors(meta, result, episode_meta):
+    errors = []
+    task_version = result.get("task_version")
+    values = (
+        meta.get("diversity"),
+        episode_meta.get("diversity"),
+        result.get("diversity"),
+    )
+    if task_version == TASK_VERSION:
+        if any(value is not None for value in values):
+            errors.append("v9 episode unexpectedly contains v10 diversity metadata")
+        return errors
+    if task_version != DIVERSE_TASK_VERSION:
+        return errors
+    if not isinstance(values[0], dict) or values[0] != values[1] or values[0] != values[2]:
+        return ["v10 diversity metadata is missing or inconsistent"]
+
+    diversity = values[0]
+    assignment = diversity.get("assignment")
+    applied = diversity.get("applied")
+    assignment_validation_errors = assignment_errors(assignment)
+    for error in assignment_validation_errors:
+        errors.append(f"diversity assignment: {error}")
+    if assignment_validation_errors:
+        return errors
+    if not isinstance(applied, dict):
+        return errors + ["diversity applied report is missing"]
+    if applied.get("assignment_id") != assignment.get("assignment_id"):
+        errors.append("applied assignment_id mismatch")
+
+    expected = {
+        "roll_length_m": assignment["object_profile"]["length_m"],
+        "roll_diameter_m": assignment["object_profile"]["diameter_m"],
+        "roll_mass_kg": assignment["dynamics_profile"]["mass_kg"],
+        "roll_sliding_friction": assignment["dynamics_profile"][
+            "sliding_friction"
+        ],
+        "light_diffuse_scale": assignment["lighting_profile"][
+            "diffuse_scale"
+        ],
+        "jpeg_quality": assignment["image_profile"]["jpeg_quality"],
+    }
+    for name, expected_value in expected.items():
+        actual = applied.get(name)
+        if (
+            isinstance(actual, bool)
+            or not isinstance(actual, (int, float))
+            or not np.isclose(actual, expected_value, atol=1e-6, rtol=0)
+        ):
+            errors.append(f"applied {name} mismatch")
+
+    actual_rgba = np.asarray(applied.get("appearance_rgba", []), dtype=float)
+    expected_rgba = np.asarray(
+        assignment["appearance_profile"]["rgba"], dtype=float
+    )
+    if (
+        actual_rgba.shape != (4,)
+        or not np.isfinite(actual_rgba).all()
+        or not np.allclose(actual_rgba, expected_rgba, atol=1e-6, rtol=0)
+    ):
+        errors.append("applied appearance_rgba mismatch")
+    if applied.get("visual_texture_disabled") is not True:
+        errors.append("v10 visual texture must be disabled for true color diversity")
+
+    spans = np.asarray(applied.get("visual_mesh_span_m", []), dtype=float)
+    length_axis = applied.get("visual_length_axis")
+    if spans.shape != (3,) or length_axis not in (0, 1, 2):
+        errors.append("applied visual mesh dimensions are invalid")
+    else:
+        if not np.isclose(
+            spans[length_axis],
+            assignment["object_profile"]["length_m"],
+            atol=2e-4,
+            rtol=0,
+        ):
+            errors.append("visual mesh length does not match object profile")
+        radial = np.delete(spans, length_axis)
+        if not np.allclose(
+            radial,
+            assignment["object_profile"]["diameter_m"],
+            atol=2e-4,
+            rtol=0,
+        ):
+            errors.append("visual mesh diameter does not match object profile")
+    if meta.get("prompt") != assignment.get("prompt"):
+        errors.append("meta prompt does not match diversity assignment")
+    if result.get("prompt") != assignment.get("prompt"):
+        errors.append("result prompt does not match diversity assignment")
+    randomization = result.get("scene_randomization") or {}
+    if randomization.get("pose_bin") != assignment.get("pose_bin"):
+        errors.append("scene randomization pose_bin mismatch")
+    return errors
+
+
 def metadata_errors(meta, result, num_frames):
     errors = []
     episode_meta = meta.get("episode_metadata") or {}
     if meta.get("task") != TASK or result.get("task") != TASK:
         errors.append("task name mismatch")
+    task_version = result.get("task_version")
     if (
-        episode_meta.get("task_version") != TASK_VERSION
-        or result.get("task_version") != TASK_VERSION
+        task_version not in SUPPORTED_TASK_VERSIONS
+        or episode_meta.get("task_version") != task_version
+        or meta.get("task_version") != task_version
     ):
         errors.append("task version mismatch")
     seed = result.get("seed")
@@ -190,6 +293,7 @@ def metadata_errors(meta, result, num_frames):
         errors.append("scene randomization mismatch across meta/result")
     elif (result.get("scene_randomization") or {}).get("enabled") is not True:
         errors.append("scene randomization is not enabled")
+    errors.extend(diversity_errors(meta, result, episode_meta))
     return errors
 
 
@@ -231,7 +335,7 @@ def frame_errors(path, num_frames, resolution_hw):
     return errors
 
 
-def validate_episode(path):
+def validate_episode(path, manifest_assignments=None):
     path = Path(path).resolve()
     errors = []
     try:
@@ -267,7 +371,20 @@ def validate_episode(path):
         "sim_seconds": result.get("sim_seconds"),
         "cameras": list(POLICY_CAMERAS),
         "resolution_hw": meta.get("resolution_hw"),
+        "task_version": result.get("task_version"),
+        "collection_profile": (meta.get("episode_metadata") or {}).get(
+            "collection_profile"
+        ),
+        "prompt": meta.get("prompt"),
+        "diversity": meta.get("diversity"),
     }
+    if manifest_assignments is not None and result.get("task_version") == DIVERSE_TASK_VERSION:
+        expected = manifest_assignments.get(seed)
+        actual = (meta.get("diversity") or {}).get("assignment")
+        if expected is None:
+            errors.append("seed is missing from campaign manifest")
+        elif actual != expected:
+            errors.append("episode assignment does not match campaign manifest")
     return info, errors
 
 
@@ -285,22 +402,42 @@ def expand_episode_paths(paths):
     return episodes
 
 
+def episode_diversity_counts(infos):
+    assignments = [
+        info["diversity"]["assignment"]
+        for info in infos
+        if info.get("task_version") == DIVERSE_TASK_VERSION
+        and isinstance(info.get("diversity"), dict)
+        and isinstance(info["diversity"].get("assignment"), dict)
+    ]
+    return manifest_counts(assignments) if assignments else {}
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("episodes", nargs="+", type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--manifest", type=Path)
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
+    manifest_assignments = None
+    manifest = None
+    if args.manifest:
+        manifest = load_manifest(args.manifest)
+        manifest_assignments = {
+            assignment["seed"]: assignment
+            for assignment in manifest["assignments"]
+        }
     episodes = expand_episode_paths(args.episodes)
     if not episodes:
         raise SystemExit("no complete episode directories found")
     records = []
     seeds = []
     for episode in episodes:
-        info, errors = validate_episode(episode)
+        info, errors = validate_episode(episode, manifest_assignments)
         records.append({
             "path": str(episode.resolve()),
             "passed": not errors,
@@ -322,15 +459,59 @@ def main(argv=None):
             "info": None,
             "errors": [f"duplicate seeds: {duplicate_seeds}"],
         })
+    infos = [record["info"] for record in records if record.get("info")]
+    task_versions = sorted(
+        {info.get("task_version") for info in infos}, key=str
+    )
+    collection_profiles = sorted(
+        {info.get("collection_profile") for info in infos}, key=str
+    )
+    campaigns = sorted({
+        info["diversity"]["assignment"].get("campaign")
+        for info in infos
+        if info.get("task_version") == DIVERSE_TASK_VERSION
+        and isinstance(info.get("diversity"), dict)
+        and isinstance(info["diversity"].get("assignment"), dict)
+    }, key=str)
+    collection_errors = []
+    if len(task_versions) != 1:
+        collection_errors.append(
+            f"task versions cannot be mixed: {task_versions}"
+        )
+    if len(collection_profiles) != 1:
+        collection_errors.append(
+            f"collection profiles cannot be mixed: {collection_profiles}"
+        )
+    if DIVERSE_TASK_VERSION in task_versions and len(campaigns) != 1:
+        collection_errors.append(
+            f"v10 campaigns cannot be mixed: {campaigns}"
+        )
+    if collection_errors:
+        records.append({
+            "path": None,
+            "passed": False,
+            "info": None,
+            "errors": collection_errors,
+        })
     passed = sum(record["passed"] for record in records)
+    passed_infos = [
+        record["info"]
+        for record in records
+        if record.get("passed") and record.get("info")
+    ]
     report = {
         "schema_version": 1,
         "task": TASK,
-        "task_version": TASK_VERSION,
+        "task_version": task_versions[0] if len(task_versions) == 1 else None,
+        "task_versions": task_versions,
+        "collection_profiles": collection_profiles,
+        "manifest": str(args.manifest.resolve()) if args.manifest else None,
+        "campaign": manifest.get("campaign") if manifest else None,
         "policy_image_map": POLICY_IMAGE_MAP,
         "episode_count": len(episodes),
         "passed_count": passed,
         "failed_count": len(records) - passed,
+        "diversity_counts": episode_diversity_counts(passed_infos),
         "passed": passed == len(records) == len(episodes),
         "records": records,
     }

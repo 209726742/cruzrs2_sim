@@ -8,7 +8,7 @@ import unittest
 COLLECTION_DIR = Path(__file__).resolve().parents[1] / "collection"
 sys.path.insert(0, str(COLLECTION_DIR))
 
-from sorting_roll_batch import parse_args, result_errors
+from sorting_roll_batch import DIVERSE_TASK_VERSION, parse_args, result_errors
 
 
 def valid_result():
@@ -56,6 +56,13 @@ class SortingRollBatchTest(unittest.TestCase):
         errors = result_errors(result)
         self.assertIn("sim_seconds exceeds 60 seconds", errors)
         self.assertIn("one-minute gate did not pass", errors)
+
+    def test_v10_result_requires_diversity_evidence(self):
+        result = valid_result()
+        result["task_version"] = DIVERSE_TASK_VERSION
+        self.assertIn("v10 diversity evidence is missing", result_errors(result))
+        result["diversity"] = {"assignment": {}, "applied": {}}
+        self.assertEqual(result_errors(result), [])
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from sorting_roll_build_v21 import (  # noqa: E402
     ACTION_NAMES,
     STATE_NAMES,
     VIDEO_FILTER,
+    parse_args,
     policy_state_action,
     sort_sources,
 )
@@ -47,6 +48,12 @@ class SortingRollBuildV21Test(unittest.TestCase):
     def test_video_resize_preserves_aspect_ratio(self):
         self.assertIn("force_original_aspect_ratio=decrease", VIDEO_FILTER)
         self.assertIn("pad=224:224", VIDEO_FILTER)
+
+    def test_builder_accepts_explicit_campaign_manifest(self):
+        args = parse_args([
+            "source", "--out", "dataset", "--manifest", "campaign.json",
+        ])
+        self.assertEqual(args.manifest, Path("campaign.json"))
 
 
 if __name__ == "__main__":

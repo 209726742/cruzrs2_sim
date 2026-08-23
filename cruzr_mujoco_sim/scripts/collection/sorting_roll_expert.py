@@ -27,12 +27,20 @@ from cruzr_s2_sdk_contract import (
     SDK_WRIST_CAMERAS,
 )
 from sorting_roll_scene import (
+    ROLL_SUPPORT_TOP_Z_M,
     TARGET_AXIS as SCENE_TARGET_AXIS,
     TARGET_CENTER as SCENE_TARGET_CENTER,
     TOP_TIER_BACK_INNER_X_M,
     TOP_TIER_FRONT_LIP_PEAK_Z_M,
     TOP_TIER_FRONT_LIP_X_M,
     TOP_TIER_TROUGH_TOP_Z_M,
+)
+from sorting_roll_diversity import (
+    DIVERSE_TASK_VERSION,
+    POSE_BINS,
+    apply_model_diversity,
+    assignment_for_seed,
+    load_manifest,
 )
 from sorting_roll_realsense_profile import (
     CAMERA_ROLES,
@@ -655,16 +663,25 @@ def mount_position_for_pad_target(
     )
 
 
-def roll_half_extent_x(axis_x):
+def roll_half_extent_x(
+    axis_x,
+    half_length=ROLL_HALF_LENGTH,
+    radius=ROLL_RADIUS,
+):
     axis_x = abs(float(axis_x))
     return (
-        ROLL_HALF_LENGTH * axis_x
-        + ROLL_RADIUS * math.sqrt(max(0.0, 1.0 - axis_x * axis_x))
+        float(half_length) * axis_x
+        + float(radius) * math.sqrt(max(0.0, 1.0 - axis_x * axis_x))
     )
 
 
-def integrated_depth_margin(center_x, axis_x):
-    half_x = roll_half_extent_x(axis_x)
+def integrated_depth_margin(
+    center_x,
+    axis_x,
+    half_length=ROLL_HALF_LENGTH,
+    radius=ROLL_RADIUS,
+):
+    half_x = roll_half_extent_x(axis_x, half_length, radius)
     center_x = float(center_x)
     return min(
         center_x - half_x - TOP_TIER_FRONT_LIP_X_M,
@@ -721,37 +738,34 @@ def insertion_axis_correction_has_clearance(
     )
 
 
-def seed_randomization(seed):
+def seed_randomization(seed, pose_bin=None):
     rng = np.random.default_rng(int(seed))
+    limits = np.asarray([
+        RANDOM_BASE_XY_LIMIT_M,
+        RANDOM_BASE_XY_LIMIT_M,
+        RANDOM_BASE_YAW_LIMIT_RAD,
+        RANDOM_ROLL_XY_LIMIT_M,
+        RANDOM_ROLL_XY_LIMIT_M,
+        RANDOM_ROLL_YAW_LIMIT_RAD,
+    ])
+    if pose_bin is None:
+        normalized = rng.uniform(-1.0, 1.0, len(limits))
+    else:
+        if pose_bin not in POSE_BINS:
+            raise ValueError(f"unknown pose bin: {pose_bin}")
+        upper = POSE_BINS[pose_bin]["normalized_max"]
+        normalized = rng.uniform(-upper, upper, len(limits))
+        lower = POSE_BINS[pose_bin]["normalized_min"]
+        if lower > 0.0:
+            focus = int(rng.integers(0, len(limits)))
+            sign = -1.0 if rng.random() < 0.5 else 1.0
+            normalized[focus] = sign * rng.uniform(lower, upper)
+    values = normalized * limits
     return {
-        "base_delta_xyyaw": [
-            float(rng.uniform(
-                -RANDOM_BASE_XY_LIMIT_M,
-                RANDOM_BASE_XY_LIMIT_M,
-            )),
-            float(rng.uniform(
-                -RANDOM_BASE_XY_LIMIT_M,
-                RANDOM_BASE_XY_LIMIT_M,
-            )),
-            float(rng.uniform(
-                -RANDOM_BASE_YAW_LIMIT_RAD,
-                RANDOM_BASE_YAW_LIMIT_RAD,
-            )),
-        ],
-        "roll_delta_xy_m": [
-            float(rng.uniform(
-                -RANDOM_ROLL_XY_LIMIT_M,
-                RANDOM_ROLL_XY_LIMIT_M,
-            )),
-            float(rng.uniform(
-                -RANDOM_ROLL_XY_LIMIT_M,
-                RANDOM_ROLL_XY_LIMIT_M,
-            )),
-        ],
-        "roll_yaw_rad": float(rng.uniform(
-            -RANDOM_ROLL_YAW_LIMIT_RAD,
-            RANDOM_ROLL_YAW_LIMIT_RAD,
-        )),
+        "pose_bin": pose_bin,
+        "base_delta_xyyaw": values[:3].tolist(),
+        "roll_delta_xy_m": values[3:5].tolist(),
+        "roll_yaw_rad": float(values[5]),
     }
 
 
@@ -774,6 +788,7 @@ def parse_args(argv=None):
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--review-videos", action="store_true")
     parser.add_argument("--randomize", action="store_true")
+    parser.add_argument("--manifest", type=Path)
     args = parser.parse_args(argv)
     if args.seed < 1:
         parser.error("--seed must be positive")
@@ -783,10 +798,12 @@ def parse_args(argv=None):
         parser.error("record dimensions must both be at least 224")
     if args.no_render and args.review_videos:
         parser.error("--review-videos requires rendering")
+    if args.manifest and not args.randomize:
+        parser.error("--manifest requires --randomize")
     return args
 
 
-def load_teleop(scene_path, gpu, seed):
+def load_teleop(scene_path, gpu, seed, prompt=None):
     os.environ["TELEOP_SCENE_XML"] = str(scene_path)
     os.environ["TELEOP_VIEWER"] = "egl"
     os.environ["MUJOCO_GL"] = "egl"
@@ -800,7 +817,7 @@ def load_teleop(scene_path, gpu, seed):
         for logical, source in MODEL_CAMERA_SOURCES.items()
     )
     os.environ["REC_SAVE_RAW_TIMESTAMPS"] = "1"
-    os.environ["REC_PROMPT"] = (
+    os.environ["REC_PROMPT"] = prompt or (
         "Pick up the roll from the table and place it stably in the top shelf slot"
     )
     spec = importlib.util.spec_from_file_location(
@@ -896,6 +913,37 @@ class SortingRollExpert:
         self.roll_joint = ct.jid("sorting_roll_free")
         self.roll_qpos_adr = int(self.model.jnt_qposadr[self.roll_joint])
         self.roll_dof_adr = int(self.model.jnt_dofadr[self.roll_joint])
+        self.diversity_assignment = getattr(
+            args, "diversity_assignment", None
+        )
+        self.task_version = (
+            DIVERSE_TASK_VERSION
+            if self.diversity_assignment is not None
+            else TASK_VERSION
+        )
+        self.diversity = None
+        if self.diversity_assignment is not None:
+            applied = apply_model_diversity(
+                self.mujoco,
+                self.model,
+                self.data,
+                self.diversity_assignment,
+            )
+            roll_radius = 0.5 * float(
+                self.diversity_assignment["object_profile"]["diameter_m"]
+            )
+            self.data.qpos[self.roll_qpos_adr + 2] = (
+                ROLL_SUPPORT_TOP_Z_M + roll_radius + 0.0015
+            )
+            self.ct.REC_JPEG_Q = int(
+                self.diversity_assignment["image_profile"]["jpeg_quality"]
+            )
+            self.mujoco.mj_forward(self.model, self.data)
+            self.diversity = {
+                "assignment": self.diversity_assignment,
+                "applied": applied,
+                "manifest": str(args.manifest.resolve()),
+            }
         self.pad_ids = {
             ct.gid(name)
             for name in ("L_pad1", "L_pad2", "R_pad1", "R_pad2")
@@ -970,9 +1018,10 @@ class SortingRollExpert:
             "count": 0,
             "phase": "initial_hold",
             "metadata": {
-                "task_version": TASK_VERSION,
+                "task_version": self.task_version,
                 "seed": args.seed,
                 "collection_profile": PROFILE_NAME,
+                "diversity": self.diversity,
                 "training_eligible": False,
                 "simulation_canary_eligible": False,
                 "success_source": "sorting_roll_task.SortingRollSuccessTracker",
@@ -1063,7 +1112,12 @@ class SortingRollExpert:
             self.scene_randomization = report
             self.ct.REC["metadata"]["scene_randomization"] = report
             return
-        values = seed_randomization(self.args.seed)
+        pose_bin = (
+            self.diversity_assignment["pose_bin"]
+            if self.diversity_assignment is not None
+            else None
+        )
+        values = seed_randomization(self.args.seed, pose_bin=pose_bin)
         for address, delta in zip(
             self.ct.BQ,
             values["base_delta_xyyaw"],
@@ -2809,8 +2863,13 @@ class SortingRollExpert:
         return -axis if axis[1] < 0.0 else axis
 
     def current_integrated_depth_margin(self):
+        radius = float(self.model.geom_size[self.roll_geom, 0])
+        half_length = float(self.model.geom_size[self.roll_geom, 1])
         return integrated_depth_margin(
-            self.roll_position()[0], self.roll_axis()[0]
+            self.roll_position()[0],
+            self.roll_axis()[0],
+            half_length,
+            radius,
         )
 
     def align_roll_axis(self, held_stage, gate_name):
@@ -2879,9 +2938,15 @@ class SortingRollExpert:
             0.002,
         ])
         axis = self.roll_axis()
+        radius = float(self.model.geom_size[self.roll_geom, 0])
+        half_length = float(self.model.geom_size[self.roll_geom, 1])
         roll_bottom_z = (
             float(self.roll_position()[2])
-            - roll_half_extent_x(float(axis[2]))
+            - roll_half_extent_x(
+                float(axis[2]),
+                half_length,
+                radius,
+            )
         )
         lip_clearance = roll_bottom_z - TOP_TIER_FRONT_LIP_PEAK_Z_M
         self.gate(
@@ -3828,8 +3893,9 @@ class SortingRollExpert:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             meta.update({
                 "task": "sorting_roll_cruzr",
-                "task_version": TASK_VERSION,
+                "task_version": self.task_version,
                 "prompt": os.environ["REC_PROMPT"],
+                "diversity": self.diversity,
                 "success": bool(success),
                 "success_source": (
                     "sorting_roll_task.SortingRollSuccessTracker"
@@ -3865,9 +3931,11 @@ class SortingRollExpert:
 
         result = {
             "task": "sorting_roll_cruzr",
-            "task_version": TASK_VERSION,
+            "task_version": self.task_version,
             "seed": self.args.seed,
             "scene_randomization": self.scene_randomization,
+            "prompt": os.environ["REC_PROMPT"],
+            "diversity": self.diversity,
             "success": bool(success),
             "training_eligible": False,
             "simulation_canary_eligible": bool(success),
@@ -3910,8 +3978,17 @@ def main(argv=None):
     sys.path.insert(0, str(CORE_DIR))
     import sorting_roll_scene
 
+    args.diversity_assignment = None
+    prompt = None
+    if args.manifest:
+        args.manifest = args.manifest.resolve()
+        manifest = load_manifest(args.manifest)
+        args.diversity_assignment = assignment_for_seed(
+            manifest, args.seed
+        )
+        prompt = args.diversity_assignment["prompt"]
     scene_path = sorting_roll_scene.materialize_scene()
-    ct = load_teleop(scene_path, args.gpu, args.seed)
+    ct = load_teleop(scene_path, args.gpu, args.seed, prompt=prompt)
     import mujoco
     from sorting_roll_task import evaluate_placement, SortingRollSuccessTracker
     from teleop_timing import CumulativeSubstepScheduler

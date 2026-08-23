@@ -43,15 +43,22 @@ INSTANTANEOUS_CHECKS = (
 )
 
 
-def fit_report():
+def fit_report(
+    roll_length_m=ROLL_LENGTH_M,
+    roll_visual_diameter_m=ROLL_VISUAL_DIAMETER_M,
+    roll_collision_radius_m=ROLL_COLLISION_RADIUS_M,
+):
+    roll_length_m = float(roll_length_m)
+    roll_visual_diameter_m = float(roll_visual_diameter_m)
+    roll_collision_radius_m = float(roll_collision_radius_m)
     shelf_usable_width = 2.0 * SHELF_INNER_HALF_WIDTH_M
-    length_clearance = shelf_usable_width - ROLL_LENGTH_M
-    roll_to_shelf_width_ratio = ROLL_LENGTH_M / shelf_usable_width
+    length_clearance = shelf_usable_width - roll_length_m
+    roll_to_shelf_width_ratio = roll_length_m / shelf_usable_width
     integrated_pocket_depth = (
         TOP_TIER_BACK_INNER_X_M - TOP_TIER_FRONT_LIP_X_M
     )
     pocket_depth_clearance = (
-        integrated_pocket_depth - ROLL_VISUAL_DIAMETER_M
+        integrated_pocket_depth - roll_visual_diameter_m
     )
     front_lip_rise = (
         TOP_TIER_FRONT_LIP_PEAK_Z_M - TOP_TIER_TROUGH_TOP_Z_M
@@ -65,17 +72,17 @@ def fit_report():
             pocket_depth_clearance > 0.0
         ),
         "front_lip_rises_above_roll_center": bool(
-            front_lip_rise > ROLL_COLLISION_RADIUS_M
+            front_lip_rise > roll_collision_radius_m
         ),
     }
     return {
         "shelf_usable_width_m": shelf_usable_width,
-        "roll_length_m": ROLL_LENGTH_M,
+        "roll_length_m": roll_length_m,
         "length_clearance_total_m": length_clearance,
         "length_clearance_each_end_m": length_clearance / 2.0,
         "roll_to_shelf_width_ratio": roll_to_shelf_width_ratio,
-        "roll_visual_diameter_m": ROLL_VISUAL_DIAMETER_M,
-        "roll_collider_diameter_m": 2.0 * ROLL_COLLISION_RADIUS_M,
+        "roll_visual_diameter_m": roll_visual_diameter_m,
+        "roll_collider_diameter_m": 2.0 * roll_collision_radius_m,
         "integrated_pocket_depth_m": integrated_pocket_depth,
         "pocket_depth_clearance_m": pocket_depth_clearance,
         "front_lip_rise_m": front_lip_rise,
@@ -132,6 +139,14 @@ def _contact_force(mujoco, model, data, first, second):
     )["force_n"]
 
 
+def roll_collision_dimensions(model, roll_geom):
+    radius = float(model.geom_size[roll_geom, 0])
+    length = 2.0 * float(model.geom_size[roll_geom, 1])
+    if radius <= 0.0 or length <= 0.0:
+        raise ValueError("roll collision dimensions must be positive")
+    return length, radius
+
+
 def evaluate_placement(model, data):
     import mujoco
 
@@ -160,19 +175,23 @@ def evaluate_placement(model, data):
         for name in ("L_pad1", "L_pad2", "R_pad1", "R_pad2")
     }
 
+    roll_length_m, roll_radius_m = roll_collision_dimensions(
+        model, roll_geom
+    )
+
     mujoco.mj_forward(model, data)
     center = data.xpos[roll_body].copy()
     rotation = data.xmat[roll_body].reshape(3, 3)
     roll_axis = rotation[:, 0].copy()
     alignment_degrees = axis_alignment_degrees(roll_axis)
     half_y_span = (
-        0.5 * ROLL_LENGTH_M * abs(float(roll_axis[1]))
-        + ROLL_COLLISION_RADIUS_M
+        0.5 * roll_length_m * abs(float(roll_axis[1]))
+        + roll_radius_m
         * math.sqrt(max(0.0, 1.0 - float(roll_axis[1]) ** 2))
     )
     half_z_span = (
-        0.5 * ROLL_LENGTH_M * abs(float(roll_axis[2]))
-        + ROLL_COLLISION_RADIUS_M
+        0.5 * roll_length_m * abs(float(roll_axis[2]))
+        + roll_radius_m
         * math.sqrt(max(0.0, 1.0 - float(roll_axis[2]) ** 2))
     )
     trough_rotation = data.geom_xmat[trough_geom].reshape(3, 3)
@@ -240,6 +259,8 @@ def evaluate_placement(model, data):
         "center_m": np.round(center, 6).tolist(),
         "axis": np.round(roll_axis, 6).tolist(),
         "axis_error_deg": round(alignment_degrees, 4),
+        "roll_length_m": round(roll_length_m, 6),
+        "roll_collision_radius_m": round(roll_radius_m, 6),
         "half_y_span_m": round(half_y_span, 6),
         "integrated_top_tier_support_force_n": round(
             integrated_support, 4
@@ -287,7 +308,15 @@ def place_roll_at_target(model, data, height_offset_m=0.002):
     )
     qpos_adr = int(model.jnt_qposadr[joint])
     dof_adr = int(model.jnt_dofadr[joint])
-    data.qpos[qpos_adr:qpos_adr + 3] = TARGET_CENTER + [0.0, 0.0, height_offset_m]
+    roll_geom = _named_id(
+        mujoco, model, mujoco.mjtObj.mjOBJ_GEOM, "sorting_roll_col"
+    )
+    _, roll_radius_m = roll_collision_dimensions(model, roll_geom)
+    data.qpos[qpos_adr:qpos_adr + 3] = TARGET_CENTER + [
+        0.0,
+        0.0,
+        roll_radius_m - ROLL_COLLISION_RADIUS_M + height_offset_m,
+    ]
     data.qpos[qpos_adr + 3:qpos_adr + 7] = [
         math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)
     ]

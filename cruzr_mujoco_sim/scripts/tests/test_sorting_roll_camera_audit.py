@@ -17,6 +17,7 @@ from sorting_roll_camera_audit import (
     principal_extent,
     project_points,
     sampled_indices,
+    stage_phase_gaps,
     wrist_observation_is_usable,
 )
 
@@ -35,6 +36,21 @@ class SortingRollCameraAuditTest(unittest.TestCase):
         self.assertEqual(sampled_indices(4, 4, 5), [4])
         with self.assertRaises(ValueError):
             sampled_indices(2, 1, 3)
+
+    def test_noop_subphase_is_skipped_but_whole_stage_is_required(self):
+        stages = {
+            "pickup": ("observe", "grasp"),
+            "place": ("align", "release"),
+        }
+        missing, skipped = stage_phase_gaps(
+            {"observe": (0, 3), "release": (4, 8)},
+            stages,
+        )
+        self.assertEqual(missing, {})
+        self.assertEqual(skipped, ["align", "grasp"])
+
+        missing, _ = stage_phase_gaps({"observe": (0, 3)}, stages)
+        self.assertEqual(missing, {"place": ["align", "release"]})
 
     def test_mask_metrics_measure_occlusion_and_axis_extent(self):
         full = np.zeros((12, 12), dtype=bool)

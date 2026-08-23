@@ -10,6 +10,15 @@ import sys
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+CORE_DIR = SCRIPT_DIR.parent / "core"
+sys.path.insert(0, str(CORE_DIR))
+from sorting_roll_diversity import (  # noqa: E402
+    DIVERSE_TASK_VERSION,
+    assignment_for_seed,
+    load_manifest,
+)
+
+
 EXPERT = SCRIPT_DIR / "sorting_roll_expert.py"
 REQUIRED_STABLE_SECONDS = 2.0
 MAX_EPISODE_SECONDS = 60.0
@@ -38,6 +47,11 @@ def result_errors(result):
     ) or {}
     if minute_gate.get("passed") is not True:
         errors.append("one-minute gate did not pass")
+    if (
+        result.get("task_version") == DIVERSE_TASK_VERSION
+        and not isinstance(result.get("diversity"), dict)
+    ):
+        errors.append("v10 diversity evidence is missing")
     return errors
 
 
@@ -61,6 +75,7 @@ def parse_args(argv=None):
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--review-videos", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--manifest", type=Path)
     args = parser.parse_args(argv)
     if args.seed_start < 1:
         parser.error("--seed-start must be positive")
@@ -79,6 +94,13 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    manifest_path = None
+    manifest = None
+    if args.manifest:
+        manifest_path = args.manifest.resolve()
+        manifest = load_manifest(manifest_path)
+        for seed in range(args.seed_start, args.seed_start + args.count):
+            assignment_for_seed(manifest, seed)
     root = args.out_root.resolve()
     if root.exists() and not args.resume:
         raise SystemExit(
@@ -115,6 +137,8 @@ def main(argv=None):
                 command.append("--no-render")
             if args.review_videos:
                 command.append("--review-videos")
+            if manifest_path:
+                command.extend(["--manifest", str(manifest_path)])
             print(f"[batch] start seed={seed}", flush=True)
             try:
                 with log_path.open("w", encoding="utf-8") as output:
@@ -146,6 +170,8 @@ def main(argv=None):
             "passed": not errors,
             "sim_seconds": sim_seconds,
             "errors": errors,
+            "task_version": result.get("task_version"),
+            "diversity": result.get("diversity"),
         }
         records.append(record)
         successes = sum(item["passed"] for item in records)
@@ -162,6 +188,11 @@ def main(argv=None):
             ),
             "render": bool(args.render),
             "review_videos": bool(args.review_videos),
+            "manifest": str(manifest_path) if manifest_path else None,
+            "campaign": manifest.get("campaign") if manifest else None,
+            "admission_group": (
+                manifest.get("admission_group") if manifest else None
+            ),
             "records": records,
         }
         write_summary(summary_path, payload)

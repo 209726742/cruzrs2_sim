@@ -11,13 +11,14 @@ import subprocess
 import numpy as np
 
 from sorting_roll_validate import (
+    DIVERSE_TASK_VERSION,
     FPS,
     POLICY_CAMERAS,
-    TASK_VERSION,
     expand_episode_paths,
     validate_episode,
 )
-from sorting_roll_realsense_profile import POLICY_IMAGE_MAP, PROFILE_NAME
+from sorting_roll_realsense_profile import POLICY_IMAGE_MAP
+from sorting_roll_diversity import load_manifest, manifest_counts
 
 
 IMAGE_SHAPE = (224, 224, 3)
@@ -208,7 +209,7 @@ def image_stats(num_frames):
     }
 
 
-def load_sources(paths):
+def load_sources(paths, manifest_assignments=None):
     episode_paths = expand_episode_paths(paths)
     if not episode_paths:
         raise ValueError("no complete source episodes found")
@@ -216,7 +217,7 @@ def load_sources(paths):
     failures = []
     seeds = set()
     for path in episode_paths:
-        info, errors = validate_episode(path)
+        info, errors = validate_episode(path, manifest_assignments)
         if errors:
             failures.append(f"{path}: {'; '.join(errors)}")
             continue
@@ -225,6 +226,31 @@ def load_sources(paths):
             continue
         seeds.add(info["seed"])
         sources.append(info)
+    task_versions = {source["task_version"] for source in sources}
+    collection_profiles = {
+        source["collection_profile"] for source in sources
+    }
+    campaigns = {
+        source["diversity"]["assignment"]["campaign"]
+        for source in sources
+        if source["task_version"] == DIVERSE_TASK_VERSION
+    }
+    if len(task_versions) > 1:
+        failures.append(
+            f"source task versions cannot be mixed: {sorted(task_versions)}"
+        )
+    if (
+        task_versions == {DIVERSE_TASK_VERSION}
+        and manifest_assignments is None
+    ):
+        failures.append("v10 sources require --manifest")
+    if len(collection_profiles) > 1:
+        failures.append(
+            "source collection profiles cannot be mixed: "
+            f"{sorted(collection_profiles)}"
+        )
+    if task_versions == {DIVERSE_TASK_VERSION} and len(campaigns) != 1:
+        failures.append(f"source v10 campaigns cannot be mixed: {sorted(campaigns)}")
     if failures:
         raise ValueError("source validation failed:\n" + "\n".join(failures))
     return sort_sources(sources)
@@ -243,6 +269,22 @@ def build_dataset(sources, out, encode_workers):
     source_lines = []
     split_ranges = {}
     global_index = 0
+    prompts = sorted({source.get("prompt") or PROMPT for source in sources})
+    task_index_by_prompt = {
+        prompt: index for index, prompt in enumerate(prompts)
+    }
+    source_task_version = sources[0]["task_version"]
+    collection_profile = sources[0]["collection_profile"]
+    source_campaign = (
+        sources[0]["diversity"]["assignment"]["campaign"]
+        if source_task_version == DIVERSE_TASK_VERSION else None
+    )
+    source_diversity_counts = (
+        manifest_counts([
+            source["diversity"]["assignment"] for source in sources
+        ])
+        if source_task_version == DIVERSE_TASK_VERSION else {}
+    )
 
     try:
         for episode_index, source in enumerate(sources):
@@ -253,6 +295,8 @@ def build_dataset(sources, out, encode_workers):
                 state, action = policy_state_action(payload)
             num_frames = len(state)
             split = source["split"]
+            prompt = source.get("prompt") or PROMPT
+            task_index = task_index_by_prompt[prompt]
             split_ranges.setdefault(split, [episode_index, episode_index])
             split_ranges[split][1] = episode_index + 1
             timestamp = (np.arange(num_frames) / FPS).astype(np.float32)
@@ -278,7 +322,7 @@ def build_dataset(sources, out, encode_workers):
                     )
                 ),
                 "task_index": pa.array(
-                    np.zeros(num_frames, dtype=np.int64)
+                    np.full(num_frames, task_index, dtype=np.int64)
                 ),
             })
             pq.write_table(
@@ -297,12 +341,13 @@ def build_dataset(sources, out, encode_workers):
             )
             episode_lines.append(json.dumps({
                 "episode_index": episode_index,
-                "tasks": [PROMPT],
+                "tasks": [prompt],
                 "length": num_frames,
                 "source_seed": source["seed"],
                 "source_split": split,
-                "source_task_version": TASK_VERSION,
-                "source_collection_profile": PROFILE_NAME,
+                "source_task_version": source["task_version"],
+                "source_collection_profile": source["collection_profile"],
+                "source_diversity": source.get("diversity"),
             }))
             episode_stats = {
                 "observation.state": channel_stats(state),
@@ -322,6 +367,10 @@ def build_dataset(sources, out, encode_workers):
                 "path": str(source_path),
                 "source_frames": num_frames,
                 "dataset_episode_index": episode_index,
+                "source_task_version": source["task_version"],
+                "source_collection_profile": source["collection_profile"],
+                "prompt": prompt,
+                "diversity": source.get("diversity"),
             }))
             global_index += num_frames
             print(
@@ -376,12 +425,14 @@ def build_dataset(sources, out, encode_workers):
     info = {
         "codebase_version": "v2.1",
         "robot_type": "cruzr_s2",
-        "source_task_version": TASK_VERSION,
-        "collection_profile": PROFILE_NAME,
+        "source_task_version": source_task_version,
+        "source_campaign": source_campaign,
+        "collection_profile": collection_profile,
+        "source_diversity_counts": source_diversity_counts,
         "policy_image_map": POLICY_IMAGE_MAP,
         "total_episodes": len(sources),
         "total_frames": global_index,
-        "total_tasks": 1,
+        "total_tasks": len(prompts),
         "total_videos": len(sources) * len(POLICY_CAMERAS),
         "total_source_episodes": len(sources),
         "total_chunks": 1,
@@ -402,7 +453,10 @@ def build_dataset(sources, out, encode_workers):
         json.dumps(info, indent=2), encoding="utf-8"
     )
     (out / "meta" / "tasks.jsonl").write_text(
-        json.dumps({"task_index": 0, "task": PROMPT}) + "\n",
+        "".join(
+            json.dumps({"task_index": index, "task": prompt}) + "\n"
+            for index, prompt in enumerate(prompts)
+        ),
         encoding="utf-8",
     )
     for name, lines in (
@@ -428,6 +482,7 @@ def parse_args(argv=None):
     parser.add_argument("sources", nargs="+", type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--encode-workers", type=int, default=1)
+    parser.add_argument("--manifest", type=Path)
     args = parser.parse_args(argv)
     if args.encode_workers < 1:
         parser.error("--encode-workers must be positive")
@@ -436,7 +491,14 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    sources = load_sources(args.sources)
+    manifest_assignments = None
+    if args.manifest:
+        manifest = load_manifest(args.manifest)
+        manifest_assignments = {
+            assignment["seed"]: assignment
+            for assignment in manifest["assignments"]
+        }
+    sources = load_sources(args.sources, manifest_assignments)
     print(f"[build] validated sources={len(sources)}", flush=True)
     build_dataset(sources, args.out.resolve(), args.encode_workers)
 

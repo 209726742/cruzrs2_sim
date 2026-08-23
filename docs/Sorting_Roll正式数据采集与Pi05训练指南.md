@@ -2,11 +2,13 @@
 
 > 状态：2026-08-24 定版。后续 Sorting Roll 仿真采集、数据验收和 π0.5 训练以本文档为准。历史推导与调试过程见 `docs/current/Sorting_Roll数据采集指南_0820.md`。
 
-当前基线和数据管线已经通过验证，但正式多样化采集尚未启动。下一步不是直接扩采 v9，而是先实现并验收第 3 节定义的 `sorting_roll_v10_diverse_sim` manifest、元数据和 validator；完成后再执行第 5 节开始的采集流程。
+`sorting_roll_v10_diverse_sim` manifest、录制元数据、validator、LeRobot v2.1 构建器和准入脚本均已实现；175 项回归和一个带渲染边界回合的端到端冒烟已通过。正式 300 回合尚未启动，当前先执行第 3.3 节的 5 组准入。
 
-## 1. 已定版的基线
+## 1. 已定版的基线与版本边界
 
-- 任务版本：`sorting_roll_v9_d405_sim`；已批准的动作、相机位姿、槽位几何和成功判定不得在同一批数据中静默修改。
+- `sorting_roll_v9_d405_sim` 是动作、相机位姿、一体式槽位几何和成功判定基线。
+- `sorting_roll_v10_diverse_sim` 保留上述基线，只增加受控的物体、位姿、外观、光照、动力学、图像质量和等价指令分布。
+- v9 与 v10 不得混入同一个 campaign 或 dataset；任何基线变化都必须提升版本并重新准入。
 - 策略输入固定为三路 RGB：
   - `observation.images.stereo_left`
   - `observation.images.left_wrist_realsense`
@@ -54,9 +56,9 @@
 
 这些变化足以做基线 canary，但不足以满足“多种类数据”的正式要求。因此，**不得直接把当前 v9 无修改扩采 300 回合并称为多样化正式数据**。
 
-### 3.2 正式采集前必须增加的分层配置
+### 3.2 已实现的 v10 分层配置
 
-新增多样性必须作为新的版本化 profile 实现，建议名称为 `sorting_roll_v10_diverse_sim`。它只改变任务相关分布，不改变已定版的相机外参、任务语义、成功标准和专家动作结构。
+新增多样性已作为 `sorting_roll_v10_diverse_sim` 实现。它只改变任务相关分布，不改变已定版的相机外参、任务语义、成功标准和专家动作结构。
 
 300 个回合应由 campaign manifest 预先分配，而不是事后查看随机结果。以下每一行都是覆盖约束，各维度可以交叉组合：
 
@@ -64,13 +66,23 @@
 | --- | --- | --- |
 | 初始位姿难度 | easy 120 / medium 120 / boundary 60 | 均在已验证可达范围内；boundary 不能越过安全边界 |
 | 棒子几何类型 | 3 类，各 100 | 候选长度为架子可用内宽的约 `82% / 85% / 88%`；精确直径、重量必须记录 |
-| 棒子外观 | 至少 5 类，每类至少 40 | 颜色、明暗和表面纹理需保持棒子可见；不能只靠颜色表达任务语义 |
+| 棒子外观 | red/orange/yellow/green/blue，各 60 | 使用无纹理纯色材质；颜色不能表达任务语义 |
 | 光照 | normal 180 / dim 60 / bright 60 | 相机必须仍能观察抓取、运输、插入和释放阶段 |
 | 动力学 | nominal 180 / 两个边界组各 60 | 质量、摩擦候选变化先限制在基准值的 `±15%`，每组单独准入 |
-| 图像扰动 | clean 180 / mild 60 / strong 60 | 只允许真实可能出现的亮度、噪声和压缩变化；相机位姿不得抖动 |
-| 任务指令 | 至少 5 个同义英文指令，每个至少 40 | 语义必须完全等价，不能引入新任务 |
+| 图像编码 | JPEG quality 92：180 / 84：60 / 76：60 | 只改变压缩质量；相机位姿、分辨率和帧率不得变化 |
+| 任务指令 | 5 个同义英文指令，各 60 | 语义完全等价，不能引入新任务 |
 
-候选几何值必须先通过 `Sorting_Roll/run_scene.sh check`。如果未来真机物体范围已知，应以实测范围替代上述候选值；不要为了“多样性”制造现实中不存在的样本。
+精确候选值如下：
+
+| profile | 长度 | 直径 | 质量 | 滑动摩擦 |
+| --- | ---: | ---: | ---: | ---: |
+| `short_slim + nominal` | 467.4 mm | 22.5 mm | 0.2500 kg | 1.2500 |
+| `medium + nominal` | 484.5 mm | 24.0 mm | 0.2500 kg | 1.2500 |
+| `long_baseline + nominal` | 500.0 mm | 24.0 mm | 0.2500 kg | 1.2500 |
+| `long_baseline + light_high_friction` | 500.0 mm | 24.0 mm | 0.2125 kg | 1.4375 |
+| `long_baseline + heavy_low_friction` | 500.0 mm | 24.0 mm | 0.2875 kg | 1.0625 |
+
+长棒直径保持已验证的 24 mm；25 mm 在边界姿态会把腕部垫片净空降到 2 mm 以下，因此不进入当前 campaign。未来真机范围已知后应使用实测值另起版本，不要制造现实中不存在的样本。
 
 ### 3.3 多样性准入门
 
@@ -83,6 +95,18 @@
 5. validator 全部通过，且动作仍然自然、平稳、低于 60 秒。
 
 任何 profile 未通过时，只剔除该 profile，不得降低物理成功标准来保留它。
+
+单卡准入入口：
+
+```bash
+ROOT=/share/home/tm1128689517650000/a852937540/cruzr_sim
+ADMISSION_ROOT=$ROOT/cruzr_mujoco_sim/output/sorting_roll_expert/v10_diverse_admission_20260824
+tmux new-session -d -s sorting_roll_v10_admission \
+  "cd '$ROOT' && bash cruzr_mujoco_sim/scripts/collection/sorting_roll_v10_admission.sh \
+    --out-root '$ADMISSION_ROOT' --gpu 0 > '$ADMISSION_ROOT/admission.log' 2>&1"
+```
+
+该脚本按风险优先顺序运行 5 组 × 20 seed；每组要求至少 18/20、validator 全通过，并审核至少 3 个三路相机回合。只有 `admission_report.json` 中 `passed=true` 才能进入正式 300 回合。
 
 ## 4. 4 卡与 8 卡的使用原则
 
@@ -116,7 +140,7 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
 
 ## 6. tmux 多卡采集模板
 
-以下模板适用于 4 卡或 8 卡。修改 `GPU_COUNT` 即可；300 个 seed 会无重叠地均分到各卡。正式运行前，采集器必须已经接入并记录第 3 节的 campaign manifest。
+以下模板适用于 4 卡或 8 卡。修改 `GPU_COUNT` 即可；300 个 seed 会无重叠地均分到各卡，所有 shard 共用一个只读 manifest。
 
 ```bash
 ROOT=/share/home/tm1128689517650000/a852937540/cruzr_sim
@@ -127,8 +151,15 @@ FIRST_SEED=1000
 CAMPAIGN=sorting_roll_v10_diverse300_$(date -u +%Y%m%d)
 RAW_ROOT=$ROOT/cruzr_mujoco_sim/output/sorting_roll_expert/$CAMPAIGN
 LOG_ROOT=$ROOT/log/$CAMPAIGN
+MANIFEST=$RAW_ROOT/campaign_manifest.json
 
 mkdir -p "$RAW_ROOT" "$LOG_ROOT"
+"$PY" cruzr_mujoco_sim/scripts/core/sorting_roll_diversity.py generate \
+  --out "$MANIFEST" --campaign "$CAMPAIGN" \
+  --seed-start "$FIRST_SEED" --count "$TOTAL"
+"$PY" cruzr_mujoco_sim/scripts/core/sorting_roll_diversity.py \
+  check "$MANIFEST"
+
 base_count=$((TOTAL / GPU_COUNT))
 extra=$((TOTAL % GPU_COUNT))
 offset=0
@@ -146,6 +177,7 @@ for ((gpu=0; gpu<GPU_COUNT; gpu++)); do
     "cd '$ROOT' && '$PY' cruzr_mujoco_sim/scripts/collection/sorting_roll_batch.py \
       --out-root '$shard' --seed-start '$seed_start' --count '$count' \
       --min-success '$min_success' --gpu '$gpu' --timeout 1800 --render \
+      --resume --manifest '$MANIFEST' \
       > '$log' 2>&1"
   offset=$((offset + count))
 done
@@ -205,7 +237,7 @@ wc -l "$SELECTED"
 mapfile -t SOURCES < "$SELECTED"
 REPORT=$RAW_ROOT/validation_report.json
 "$PY" cruzr_mujoco_sim/scripts/collection/sorting_roll_validate.py \
-  "${SOURCES[@]}" --report "$REPORT"
+  "${SOURCES[@]}" --manifest "$MANIFEST" --report "$REPORT"
 ```
 
 必须看到：
@@ -217,7 +249,7 @@ failed_count=0
 passed=true
 ```
 
-除现有 validator 外，正式 v10 validator 还必须核对 manifest 与 episode 元数据完全一致，并输出每个 diversity stratum 在 train/val/test 中的数量。只要有重复 seed、缺失类别或分层偏斜，就停止构建。
+v10 validator 会核对 manifest 与 episode assignment、实际应用的物理/视觉参数、prompt 和 campaign 完全一致，并输出各 diversity stratum 的数量。只要有重复 seed、混合版本、混合 campaign、缺失类别或分层偏斜，就停止构建。
 
 ## 9. π0.5 数据格式契约
 
@@ -248,9 +280,10 @@ seed_xxxx/
 构建 v2.1 staging 数据集：
 
 ```bash
-DATASET=$ROOT/cruzr_mujoco_sim/out/datasets/sorting_roll_v10_diverse300_lerobot_v30
+DATASET_V21=$ROOT/cruzr_mujoco_sim/out/datasets/sorting_roll_v10_diverse300_lerobot_v21
 "$PY" cruzr_mujoco_sim/scripts/collection/sorting_roll_build_v21.py \
-  "${SOURCES[@]}" --out "$DATASET" --encode-workers 4
+  "${SOURCES[@]}" --out "$DATASET_V21" --encode-workers 4 \
+  --manifest "$MANIFEST"
 ```
 
 转换为 LeRobot v3.0：
@@ -258,12 +291,14 @@ DATASET=$ROOT/cruzr_mujoco_sim/out/datasets/sorting_roll_v10_diverse300_lerobot_
 ```bash
 ISAAC_PY=/isaac-sim/python.sh
 REPO_ID=local/sorting_roll_v10_diverse300
+DATASET=$ROOT/cruzr_mujoco_sim/out/datasets/sorting_roll_v10_diverse300_lerobot_v30
+cp -a "$DATASET_V21" "$DATASET"
 PYTHONPATH=. "$ISAAC_PY" \
   src/lerobot/datasets/v30/convert_dataset_v21_to_v30.py \
   --repo-id "$REPO_ID" --root "$DATASET" --push-to-hub false
 ```
 
-转换后必须核对 `meta/info.json` 和 `meta/stats.json`，并用真实 `LeRobotDataset` 解码首帧、尾帧及每个 diversity stratum 的随机样本。v3 审计通过前不要删除 v2.1 staging 备份。
+转换脚本会原地修改目标，因此先复制并保留 `$DATASET_V21`。转换后必须核对 `meta/info.json` 和统计文件，并用真实 `LeRobotDataset` 解码首帧、尾帧及每个 diversity stratum 的随机样本。v3 审计通过前不要删除 v2.1 staging 备份。
 
 ## 10. π0.5 训练前 canary
 
@@ -317,6 +352,7 @@ bash pi05_train.sh dry-run \
 
 ## 13. 当前保留的定版证据
 
+- `cruzr_mujoco_sim/output/sorting_roll_expert/v10_diverse_admission_20260824/`（v10 manifest、带渲染边界冒烟、相机审计和 LeRobot v2.1 冒烟；5×20 准入进行中）
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_20seed_final_20260823/`
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_review_seed0120/`
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_canary30_final_seed0200_0229/`
@@ -324,3 +360,5 @@ bash pi05_train.sh dry-run \
 - `cruzr_mujoco_sim/out/datasets/sorting_roll_d405_canary30_lerobot_v30_20260823/`
 
 2026-08-24 已删除 22 组定版前调参/诊断产物，约释放 32 MiB。最终 30 回合原始源约 5.47 GiB，因承担验证和数据重建的可追溯性而保留。
+
+材质修复前生成的 v10 冒烟已移入 `rejected_pre_texture_fix/`，不会被 validator 或构建器扫描；它只作为问题留证，不可用于训练。
