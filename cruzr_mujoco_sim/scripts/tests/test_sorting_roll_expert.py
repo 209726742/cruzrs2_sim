@@ -15,6 +15,10 @@ from sorting_roll_expert import (
     ARM_RETRACT_M,
     BASE_MAX_SPEED,
     BASE_MAX_YAW_RATE,
+    RANDOM_BASE_XY_LIMIT_M,
+    RANDOM_BASE_YAW_LIMIT_RAD,
+    RANDOM_ROLL_XY_LIMIT_M,
+    RANDOM_ROLL_YAW_LIMIT_RAD,
     FLAT_REGRASP_ANGLE_DEG,
     FLAT_REGRASP_ANCHOR_CORRECTION_MAX_M,
     FLAT_REGRASP_ANCHOR_CORRECTION_TARGET_M,
@@ -48,6 +52,10 @@ from sorting_roll_expert import (
     RELEASE_GUARDED_DROP_Z_M,
     RELEASE_INSERT_STEP_M,
     RELEASE_INSERT_TARGET_X_M,
+    RELEASE_OPEN_BACKOFF_MAX_M,
+    RELEASE_OPEN_BACKOFF_STEP_M,
+    RELEASE_OPEN_CLEARANCE_LIFT_MAX_M,
+    RELEASE_OPEN_INITIAL_BACKOFF_M,
     RELEASE_PAD_SLIDING_FRICTION,
     RELEASE_PAD_SHELF_CLEARANCE_MIN_M,
     ROLL_RADIUS,
@@ -84,7 +92,9 @@ from sorting_roll_expert import (
     rotation_axis_angle,
     rotation_z,
     roll_half_extent_x,
+    seed_randomization,
     resolved_geom_clearance,
+    release_is_clear,
     symmetric_level_correction,
     symmetric_axis_correction,
 )
@@ -95,6 +105,14 @@ from sorting_roll_scene import (
 
 
 class SortingRollExpertTest(unittest.TestCase):
+    def test_release_sequence_keeps_strict_contact_gate(self):
+        clear = {"force_n": 0.0, "pads": []}
+        touching = {"force_n": 1.2, "pads": ["L_pad1"]}
+        weak_contact = {"force_n": 0.051, "pads": []}
+        self.assertTrue(release_is_clear(clear, clear))
+        self.assertFalse(release_is_clear(touching, clear))
+        self.assertFalse(release_is_clear(clear, weak_contact))
+
     def test_angle_wraps_to_shortest_signed_distance(self):
         self.assertAlmostEqual(angle(3.0 * math.pi), -math.pi)
         self.assertAlmostEqual(angle(-3.0 * math.pi), -math.pi)
@@ -260,29 +278,44 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             joint_polyline_at_progress(waypoints, -0.01)
-    def test_v8_target_is_sourced_from_scene_contract(self):
-        self.assertEqual(TASK_VERSION, "sorting_roll_v8")
+    def test_v9_target_is_sourced_from_scene_contract(self):
+        self.assertEqual(TASK_VERSION, "sorting_roll_v9_d405_sim")
         np.testing.assert_allclose(TARGET_CENTER, SCENE_TARGET_CENTER)
 
-    def test_v8_records_only_sdk_aligned_robot_cameras(self):
+    def test_seed_randomization_is_bounded_and_reproducible(self):
+        first = seed_randomization(17)
+        self.assertEqual(first, seed_randomization(17))
+        self.assertNotEqual(first, seed_randomization(18))
+        self.assertTrue(all(
+            abs(value) <= RANDOM_BASE_XY_LIMIT_M
+            for value in first["base_delta_xyyaw"][:2]
+        ))
+        self.assertLessEqual(
+            abs(first["base_delta_xyyaw"][2]),
+            RANDOM_BASE_YAW_LIMIT_RAD,
+        )
+        self.assertTrue(all(
+            abs(value) <= RANDOM_ROLL_XY_LIMIT_M
+            for value in first["roll_delta_xy_m"]
+        ))
+        self.assertLessEqual(
+            abs(first["roll_yaw_rad"]),
+            RANDOM_ROLL_YAW_LIMIT_RAD,
+        )
+
+    def test_v9_records_three_d405_candidate_policy_cameras(self):
         self.assertEqual(
             POLICY_CAMERAS,
-            ("stereo_left", "waist_front", "chassis_front"),
-        )
-        self.assertEqual(REVIEW_ONLY_CAMERAS, ("stereo_right",))
-        self.assertEqual(
-            RECORDED_CAMERAS,
             (
                 "stereo_left",
-                "stereo_right",
-                "waist_front",
-                "chassis_front",
+                "left_wrist_realsense",
+                "right_wrist_realsense",
             ),
         )
-        self.assertNotIn("hand_left", RECORDED_CAMERAS)
-        self.assertNotIn("hand_right", RECORDED_CAMERAS)
+        self.assertEqual(REVIEW_ONLY_CAMERAS, ("third_person",))
+        self.assertEqual(RECORDED_CAMERAS, POLICY_CAMERAS)
 
-    def test_v8_compiled_camera_mounts_match_sdk_extrinsics(self):
+    def test_v9_global_camera_mount_matches_sdk_extrinsics(self):
         import mujoco
 
         model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))
@@ -292,7 +325,7 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertFalse(report["intrinsics_verified"])
         self.assertEqual(
             set(report["cameras"]),
-            set(RECORDED_CAMERAS),
+            {"stereo_left"},
         )
         for camera in report["cameras"].values():
             self.assertLessEqual(camera["position_error_mm"], 0.05)
@@ -619,10 +652,10 @@ class SortingRollExpertTest(unittest.TestCase):
             execute_source,
         )
         self.assertIn(
-            "self.reverse(corridor_reverse_m, max_speed=0.20)",
+            "self.reverse(corridor_reverse_m, max_speed=0.26)",
             execute_source,
         )
-        self.assertIn("shelf_base, 0.0, max_speed=0.22", execute_source)
+        self.assertIn("shelf_base, 0.0, max_speed=0.28", execute_source)
         self.assertEqual(execute_source.count("self.turn_in_place(0.0)"), 1)
         self.assertIn(
             '"flat_pick_goal_ik_reachable"',
@@ -654,7 +687,7 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         self.assertNotIn("release_with_backward_withdrawal", execute_source)
 
-    def test_review_multiview_labels_sdk_camera_mounts(self):
+    def test_review_multiview_labels_d405_candidate_roles(self):
 
         source = (
             COLLECTION_DIR / "sorting_roll_expert.py"
@@ -664,11 +697,13 @@ class SortingRollExpertTest(unittest.TestCase):
             source.index("    def finalize")
         ]
         self.assertIn("drawtext", encode_source)
-        self.assertIn("SDK_SENSOR_EXTRINSICS_ZYX", encode_source)
+        self.assertIn("MODEL_CAMERA_SOURCES", encode_source)
+        self.assertIn("CAMERA_ROLES", encode_source)
+        self.assertIn("xstack=inputs=3", encode_source)
         self.assertIn("slot_visual_review_video", encode_source)
         self.assertIn("slot_physics_review_video", encode_source)
 
-    def test_guarded_release_lifts_while_opening_before_retracting(self):
+    def test_guarded_release_opens_before_lifting_and_retracting(self):
         source = (
             COLLECTION_DIR / "sorting_roll_expert.py"
         ).read_text(encoding="utf-8")
@@ -691,6 +726,16 @@ class SortingRollExpertTest(unittest.TestCase):
             release.index("self.move_mount_commands_delta"),
         )
         self.assertIn("RELEASE_CLEARANCE_LIFT_M", release)
+        self.assertEqual(RELEASE_OPEN_INITIAL_BACKOFF_M, 0.010)
+        self.assertEqual(RELEASE_OPEN_BACKOFF_STEP_M, 0.004)
+        self.assertEqual(RELEASE_OPEN_BACKOFF_MAX_M, 0.050)
+        self.assertEqual(RELEASE_OPEN_CLEARANCE_LIFT_MAX_M, 0.010)
+        self.assertIn("guarded_release_clear_confirmation", release)
+        self.assertLess(
+            release.index("guarded_release_clear_confirmation"),
+            release.index("release_clear_confirmed = True"),
+        )
+        self.assertIn("release_contact_geometry", release)
         before_open = release[:release.index('self.ct.grip_cmd["l"]')]
         after_open = release[release.index('self.ct.grip_cmd["l"]'):]
         self.assertNotIn(

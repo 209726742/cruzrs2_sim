@@ -4,17 +4,27 @@ import sys
 from pathlib import Path
 import unittest
 
+import numpy as np
+
 
 CORE_DIR = Path(__file__).resolve().parents[1] / "core"
 sys.path.insert(0, str(CORE_DIR))
 
 from sorting_roll_realsense_profile import (
     CAMERA_ROLES,
+    D405_DEPTH_POLICY_INPUT,
+    D405_FOV_DEG,
+    D405_IDEAL_RANGE_M,
+    D405_MODEL,
+    D405_RGB_FPS,
+    D405_RGB_RESOLUTION_WH,
+    D405_SHUTTER,
     HARDWARE_VERIFIED,
     MODEL_CAMERA_OVERRIDES,
     MODEL_CAMERA_SOURCES,
     POLICY_IMAGE_MAP,
     TRAINING_ELIGIBLE,
+    apply_model_camera_overrides,
     profile_report,
 )
 
@@ -44,10 +54,56 @@ class SortingRollRealSenseProfileTest(unittest.TestCase):
         self.assertFalse(HARDWARE_VERIFIED)
         self.assertFalse(TRAINING_ELIGIBLE)
 
-    def test_right_wrist_override_is_explicit_and_provisional(self):
-        override = MODEL_CAMERA_OVERRIDES["right_wrist_realsense"]
-        self.assertEqual(len(override["quat_wxyz"]), 4)
-        self.assertEqual(override["fovy_deg"], 75.0)
+    def test_d405_nominal_rgb_contract_is_explicit(self):
+        self.assertEqual(D405_MODEL, "RealSense D405")
+        self.assertEqual(D405_RGB_RESOLUTION_WH, (1280, 720))
+        self.assertEqual(D405_RGB_FPS, 30)
+        self.assertEqual(D405_FOV_DEG, (87.0, 58.0))
+        self.assertEqual(D405_IDEAL_RANGE_M, (0.07, 0.50))
+        self.assertEqual(D405_SHUTTER, "global")
+        self.assertFalse(D405_DEPTH_POLICY_INPUT)
+        for wrist in ("left_wrist_realsense", "right_wrist_realsense"):
+            self.assertEqual(
+                MODEL_CAMERA_OVERRIDES[wrist]["fovy_deg"],
+                D405_FOV_DEG[1],
+            )
+        self.assertEqual(
+            len(MODEL_CAMERA_OVERRIDES[
+                "right_wrist_realsense"
+            ]["quat_wxyz"]),
+            4,
+        )
+
+    def test_fovy_only_override_preserves_left_proxy_orientation(self):
+        class CameraObject:
+            mjOBJ_CAMERA = 0
+
+        class MujocoStub:
+            mjtObj = CameraObject
+
+            @staticmethod
+            def mj_name2id(model, object_type, name):
+                return model.camera_ids.get(name, -1)
+
+        class ModelStub:
+            camera_ids = {
+                "hand_left_shelf": 0,
+                "hand_right": 1,
+                "stereo_left": 2,
+            }
+            cam_quat = np.asarray([
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+            ])
+            cam_fovy = np.asarray([75.0, 75.0, 70.0])
+
+        model = ModelStub()
+        left_quat = model.cam_quat[0].copy()
+        apply_model_camera_overrides(MujocoStub(), model)
+        np.testing.assert_array_equal(model.cam_quat[0], left_quat)
+        self.assertEqual(model.cam_fovy[0], 58.0)
+        self.assertEqual(model.cam_fovy[1], 58.0)
 
 
 if __name__ == "__main__":

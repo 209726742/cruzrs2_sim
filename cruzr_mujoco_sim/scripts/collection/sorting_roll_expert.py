@@ -20,7 +20,6 @@ if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
 from cruzr_s2_sdk_contract import (
     SDK_CAMERA_INTRINSICS_VERIFIED,
-    SDK_CAMERAS,
     SDK_DOCUMENTED_RGB_CAMERA_TOPICS,
     SDK_DOC_REVISION,
     SDK_SENSOR_EXTRINSICS_ZYX,
@@ -35,18 +34,32 @@ from sorting_roll_scene import (
     TOP_TIER_FRONT_LIP_X_M,
     TOP_TIER_TROUGH_TOP_Z_M,
 )
-
-
-TASK_VERSION = "sorting_roll_v8"
-POLICY_CAMERAS = tuple(SDK_CAMERAS)
-REVIEW_ONLY_CAMERAS = ("stereo_right",)
-RECORDED_CAMERAS = (
-    "stereo_left", "stereo_right", "waist_front", "chassis_front",
+from sorting_roll_realsense_profile import (
+    CAMERA_ROLES,
+    D405_DEPTH_POLICY_INPUT,
+    D405_FOV_DEG,
+    D405_IDEAL_RANGE_M,
+    D405_MODEL,
+    D405_RGB_FPS,
+    D405_RGB_RESOLUTION_WH,
+    D405_SHUTTER,
+    MODEL_CAMERA_SOURCES,
+    POLICY_IMAGE_MAP,
+    PROFILE_NAME,
+    apply_model_camera_overrides,
+    profile_report,
 )
+from sorting_roll_task import REQUIRED_STABLE_SECONDS
+
+
+TASK_VERSION = "sorting_roll_v9_d405_sim"
+POLICY_CAMERAS = tuple(MODEL_CAMERA_SOURCES)
+REVIEW_ONLY_CAMERAS = ("third_person",)
+RECORDED_CAMERAS = POLICY_CAMERAS
 UNMODELED_SDK_RGB_CAMERAS = tuple(
     camera
     for camera in SDK_DOCUMENTED_RGB_CAMERA_TOPICS
-    if camera not in RECORDED_CAMERAS
+    if camera not in MODEL_CAMERA_SOURCES.values()
 )
 FLAT_REGRASP_ORDER = (("r", "l", -1.0), ("l", "r", 1.0))
 TARGET_CENTER = np.array(SCENE_TARGET_CENTER, dtype=float, copy=True)
@@ -107,6 +120,11 @@ RELEASE_PAD_SHELF_CLEARANCE_MIN_M = 0.002
 RELEASE_WRIST_LEVEL_DEG = 4.0
 RELEASE_INSERT_STEP_M = 0.006
 RELEASE_CLEARANCE_LIFT_M = 0.050
+RELEASE_OPEN_INITIAL_BACKOFF_M = 0.010
+RELEASE_OPEN_BACKOFF_STEP_M = 0.004
+RELEASE_OPEN_BACKOFF_MAX_M = 0.050
+RELEASE_OPEN_CLEARANCE_LIFT_MAX_M = 0.010
+RELEASE_OPEN_FINAL_SETTLE_TICKS = 12
 RELEASE_PAD_SLIDING_FRICTION = 1.0
 RELEASE_FRICTION_SETTLE_TICKS = 12
 GRASP_YAW_DEG = 14.0
@@ -143,21 +161,24 @@ ONE_HAND_SUPPORT_DROP_TOLERANCE_M = 0.025
 IK_ROTATION_TOLERANCE_DEG = 5.0
 ENTRY_X_COMMAND_BIAS = -0.0003
 RELEASE_GRIP_RATE = 0.035
-BASE_ACCEL = 0.8
-BASE_YAW_ACCEL = 0.6
-BASE_MAX_SPEED = 0.24
-BASE_MAX_YAW_RATE = 0.45
+BASE_ACCEL = 1.0
+BASE_YAW_ACCEL = 0.8
+BASE_MAX_SPEED = 0.30
+BASE_MAX_YAW_RATE = 0.55
 CONTROL_FPS = 60.0
 GRIP_FORCE_MIN_N = 0.2
 HOLD_CONTACT_RECOVERY_TICKS = 30
 ARM_TRACK_TOL_RAD = 0.03
 ARM_TRACK_STABLE_TICKS = 6
 ARM_TRACK_MAX_TICKS = 900
-ARM_SERVO_MAX_STEP_RAD = 0.010
-ARM_SERVO_MIN_TICKS = 18
-ARM_SERVO_SETTLE_TICKS = 12
+ARM_SERVO_MAX_STEP_RAD = 0.016
+ARM_SERVO_MIN_TICKS = 12
+ARM_SERVO_SETTLE_TICKS = 2
 GRASP_SETTLE_TICKS = 60
-RELEASE_OPEN_TICKS = 60
+RANDOM_BASE_XY_LIMIT_M = 0.015
+RANDOM_BASE_YAW_LIMIT_RAD = 0.025
+RANDOM_ROLL_XY_LIMIT_M = 0.004
+RANDOM_ROLL_YAW_LIMIT_RAD = 0.012
 SLOT_VISUAL_REVIEW_CAMERA = (0.85, -45.0, -45.0)
 SLOT_PHYSICS_REVIEW_CAMERA = (0.85, -45.0, -45.0)
 
@@ -431,7 +452,7 @@ def camera_mount_report(mujoco, model, data):
     head_rotation = rotation_y(task_pitch)
 
     expected = {}
-    for camera in RECORDED_CAMERAS:
+    for camera in ("stereo_left",):
         raw = SDK_SENSOR_EXTRINSICS_ZYX[camera]
         offset = np.asarray(raw["xyz_m"], dtype=float)
         if camera.startswith("stereo_"):
@@ -699,6 +720,50 @@ def insertion_axis_correction_has_clearance(
         >= INSERT_AXIS_CORRECTION_MIN_CLEARANCE_M
     )
 
+
+def seed_randomization(seed):
+    rng = np.random.default_rng(int(seed))
+    return {
+        "base_delta_xyyaw": [
+            float(rng.uniform(
+                -RANDOM_BASE_XY_LIMIT_M,
+                RANDOM_BASE_XY_LIMIT_M,
+            )),
+            float(rng.uniform(
+                -RANDOM_BASE_XY_LIMIT_M,
+                RANDOM_BASE_XY_LIMIT_M,
+            )),
+            float(rng.uniform(
+                -RANDOM_BASE_YAW_LIMIT_RAD,
+                RANDOM_BASE_YAW_LIMIT_RAD,
+            )),
+        ],
+        "roll_delta_xy_m": [
+            float(rng.uniform(
+                -RANDOM_ROLL_XY_LIMIT_M,
+                RANDOM_ROLL_XY_LIMIT_M,
+            )),
+            float(rng.uniform(
+                -RANDOM_ROLL_XY_LIMIT_M,
+                RANDOM_ROLL_XY_LIMIT_M,
+            )),
+        ],
+        "roll_yaw_rad": float(rng.uniform(
+            -RANDOM_ROLL_YAW_LIMIT_RAD,
+            RANDOM_ROLL_YAW_LIMIT_RAD,
+        )),
+    }
+
+
+def release_is_clear(left, right):
+    return (
+        not left["pads"]
+        and not right["pads"]
+        and left["force_n"] <= 0.05
+        and right["force_n"] <= 0.05
+    )
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, help="new episode output directory")
@@ -707,6 +772,7 @@ def parse_args(argv=None):
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
     parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--randomize", action="store_true")
     args = parser.parse_args(argv)
     if args.seed < 1:
         parser.error("--seed must be positive")
@@ -726,6 +792,10 @@ def load_teleop(scene_path, gpu, seed):
     os.environ["CRUZR_GRIP_CLOSE"] = "0.025"
     os.environ["CRUZR_EP_SEED"] = str(seed)
     os.environ["REC_CAMS"] = ",".join(RECORDED_CAMERAS)
+    os.environ["REC_CAMERA_SOURCES"] = ",".join(
+        f"{logical}={source}"
+        for logical, source in MODEL_CAMERA_SOURCES.items()
+    )
     os.environ["REC_SAVE_RAW_TIMESTAMPS"] = "1"
     os.environ["REC_PROMPT"] = (
         "Pick up the roll from the table and place it stably in the top shelf slot"
@@ -789,6 +859,10 @@ class SortingRollExpert:
         self.tracker_cls = tracker_cls
         self.model = ct.m
         self.data = ct.d
+        apply_model_camera_overrides(
+            self.mujoco,
+            self.model,
+        )
         self.out = Path(args.out).resolve()
         self.review_dir = self.out / "diagnostics" / "third_person"
         self.review_video = self.out / "sorting_roll_review.mp4"
@@ -894,12 +968,24 @@ class SortingRollExpert:
             "metadata": {
                 "task_version": TASK_VERSION,
                 "seed": args.seed,
-                "collection_profile": "sorting_roll_canary_v8_integrated_shelf",
+                "collection_profile": PROFILE_NAME,
                 "training_eligible": False,
+                "simulation_canary_eligible": False,
                 "success_source": "sorting_roll_task.SortingRollSuccessTracker",
                 "policy_cameras": list(POLICY_CAMERAS),
+                "policy_image_map": dict(POLICY_IMAGE_MAP),
                 "review_only_cameras": list(REVIEW_ONLY_CAMERAS),
                 "recorded_cameras": list(RECORDED_CAMERAS),
+                "model_camera_sources": dict(MODEL_CAMERA_SOURCES),
+                "camera_roles": dict(CAMERA_ROLES),
+                "camera_model": D405_MODEL,
+                "d405_rgb_resolution_wh": list(D405_RGB_RESOLUTION_WH),
+                "d405_rgb_fps": D405_RGB_FPS,
+                "d405_fov_deg": list(D405_FOV_DEG),
+                "d405_ideal_range_m": list(D405_IDEAL_RANGE_M),
+                "d405_shutter": D405_SHUTTER,
+                "depth_policy_input": D405_DEPTH_POLICY_INPUT,
+                "realsense_candidate_profile": profile_report(),
                 "sdk_document_revision": SDK_DOC_REVISION,
                 "sdk_documented_rgb_cameras": list(
                     SDK_DOCUMENTED_RGB_CAMERA_TOPICS
@@ -908,13 +994,14 @@ class SortingRollExpert:
                 "unmodeled_sdk_rgb_cameras": list(
                     UNMODELED_SDK_RGB_CAMERAS
                 ),
-                "synthetic_wrist_cameras_recorded": False,
+                "synthetic_wrist_cameras_recorded": True,
                 "camera_extrinsics_source": (
-                    f"CRUZR S2 SDK {SDK_DOC_REVISION} section 1.4.2"
+                    "stereo_left_from_CRUZR_SDK; "
+                    "dual_D405_proxy_extrinsics_pending_real_mount"
                 ),
                 "camera_intrinsics_verified": SDK_CAMERA_INTRINSICS_VERIFIED,
                 "camera_fovy_status": (
-                    "simulation_assumption_pending_real_CameraInfo"
+                    "D405_nominal_FOV_pending_real_CameraInfo"
                 ),
                 "review_camera": "free_camera_azimuth_45_not_policy_input",
                 "slot_visual_review_camera": (
@@ -960,6 +1047,48 @@ class SortingRollExpert:
         ) = SLOT_PHYSICS_REVIEW_CAMERA
         self.slot_physics_review_option = mujoco.MjvOption()
         self.slot_physics_review_option.geomgroup[3] = 1
+        self.apply_scene_randomization()
+
+    def apply_scene_randomization(self):
+        report = {
+            "enabled": bool(self.args.randomize),
+            "seed": self.args.seed,
+        }
+        if not self.args.randomize:
+            self.scene_randomization = report
+            self.ct.REC["metadata"]["scene_randomization"] = report
+            return
+        values = seed_randomization(self.args.seed)
+        for address, delta in zip(
+            self.ct.BQ,
+            values["base_delta_xyyaw"],
+        ):
+            self.data.qpos[address] += delta
+        self.data.qpos[
+            self.roll_qpos_adr:self.roll_qpos_adr + 2
+        ] += values["roll_delta_xy_m"]
+        half_yaw = 0.5 * values["roll_yaw_rad"]
+        yaw_quaternion = np.asarray([
+            math.cos(half_yaw),
+            0.0,
+            0.0,
+            math.sin(half_yaw),
+        ])
+        rotated = np.empty(4, dtype=float)
+        self.mujoco.mju_mulQuat(
+            rotated,
+            yaw_quaternion,
+            self.data.qpos[
+                self.roll_qpos_adr + 3:self.roll_qpos_adr + 7
+            ],
+        )
+        self.data.qpos[
+            self.roll_qpos_adr + 3:self.roll_qpos_adr + 7
+        ] = rotated
+        self.mujoco.mj_forward(self.model, self.data)
+        report.update(values)
+        self.scene_randomization = report
+        self.ct.REC["metadata"]["scene_randomization"] = report
 
     def phase(self, name):
         self.ct.REC["phase"] = name
@@ -1212,6 +1341,40 @@ class SortingRollExpert:
             ),
         }
 
+    def roll_pad_contact_geometry(self):
+        details = []
+        force = np.zeros(6, dtype=float)
+        roll_center = self.roll_position()
+        for index in range(self.data.ncon):
+            contact = self.data.contact[index]
+            pair = {int(contact.geom1), int(contact.geom2)}
+            pad_pair = pair & self.pad_ids
+            if self.roll_geom not in pair or not pad_pair:
+                continue
+            pad = next(iter(pad_pair))
+            self.mujoco.mj_contactForce(
+                self.model, self.data, index, force
+            )
+            pad_center = self.data.geom_xpos[pad].copy()
+            details.append({
+                "pad": self.geom_label(pad),
+                "geom1": self.geom_label(int(contact.geom1)),
+                "geom2": self.geom_label(int(contact.geom2)),
+                "force_n": round(abs(float(force[0])), 6),
+                "contact_position_m": np.round(
+                    contact.pos, 6
+                ).tolist(),
+                "contact_normal_world": np.round(
+                    contact.frame[:3], 6
+                ).tolist(),
+                "pad_center_m": np.round(pad_center, 6).tolist(),
+                "roll_center_m": np.round(roll_center, 6).tolist(),
+                "roll_to_pad_center_m": np.round(
+                    pad_center - roll_center, 6
+                ).tolist(),
+            })
+        return details
+
     def set_base_velocity(self, forward, yaw_rate):
         dt = (1.0 / CONTROL_FPS) * self.ct.REC_DECIM
         self.ct.base_vel[0] += float(np.clip(
@@ -1232,7 +1395,7 @@ class SortingRollExpert:
             self.set_base_velocity(0.0, 0.0)
             self.frames(self.ct.REC_DECIM)
         self.ct.base_vel[:] = 0.0
-        self.frames(12)
+        self.frames(6)
 
     @staticmethod
     def brake_cap(remaining, acceleration):
@@ -1434,7 +1597,16 @@ class SortingRollExpert:
             float(np.max(np.abs(targets[hand] - self.ct.qtgt[hand])))
             for hand in ("l", "r")
         )
-        steps = cosine_steps(distance, max_step, minimum=minimum)
+        effective_max_step = (
+            min(max_step, 0.012)
+            if shelf_safe
+            else max_step
+        )
+        steps = cosine_steps(
+            distance,
+            effective_max_step,
+            minimum=minimum,
+        )
         starts = {hand: self.ct.qtgt[hand].copy() for hand in ("l", "r")}
         for index in range(steps):
             blend = 0.5 - 0.5 * math.cos(math.pi * (index + 1) / steps)
@@ -2841,6 +3013,12 @@ class SortingRollExpert:
                 before_release["axis_error_deg"],
                 depth_margin,
             )
+            and depth_margin - RELEASE_OPEN_INITIAL_BACKOFF_M >= 0.005
+            and (
+                roll_clearance["distance_m"]
+                + RELEASE_OPEN_CLEARANCE_LIFT_MAX_M
+                <= RELEASE_DROP_MAX_M
+            )
             and not arm_shelf_contacts
             and pad_contact["force_n"] <= 0.2
             and guarded_release_is_ready(
@@ -2851,6 +3029,10 @@ class SortingRollExpert:
             f"axis_error_deg={before_release['axis_error_deg']} "
             f"endpoint_margins={endpoint_margins} "
             f"depth_margin_mm={1000.0 * depth_margin:.2f} "
+            f"bounded_backoff_depth_margin_mm="
+            f"{1000.0 * (depth_margin - RELEASE_OPEN_INITIAL_BACKOFF_M):.2f} "
+            f"bounded_open_drop_mm="
+            f"{1000.0 * (roll_clearance['distance_m'] + RELEASE_OPEN_CLEARANCE_LIFT_MAX_M):.3f} "
             f"trough_gap_mm="
             f"{1000.0 * before_release['roll_bottom_to_trough_gap_m']:.3f} "
             f"roll_support_clearance_mm="
@@ -2875,36 +3057,88 @@ class SortingRollExpert:
         self.ct.grip_cmd["l"] = self.ct.GRIP_OPEN
         self.ct.grip_cmd["r"] = self.ct.GRIP_OPEN
         self.move_mount_commands_delta(
-            [0.0, 0.0, RELEASE_CLEARANCE_LIFT_M],
+            [
+                -RELEASE_OPEN_INITIAL_BACKOFF_M,
+                0.0,
+                RELEASE_OPEN_CLEARANCE_LIFT_MAX_M,
+            ],
             shelf_safe=True,
         )
-        for _ in range(RELEASE_OPEN_TICKS):
+        max_steps = int(round(
+            (
+                RELEASE_OPEN_BACKOFF_MAX_M
+                - RELEASE_OPEN_INITIAL_BACKOFF_M
+            )
+            / RELEASE_OPEN_BACKOFF_STEP_M
+        ))
+        release_steps = 0
+        release_clear_confirmed = False
+        for _ in range(RELEASE_OPEN_FINAL_SETTLE_TICKS):
             self.frames(1)
             self.require_arms_clear_shelf(
-                "guarded_release_open_settle"
+                "guarded_release_initial_clearance_settle"
             )
-
-        end_mount_z = float(np.mean([
-            self.data.xpos[self.ct.L.mount, 2],
-            self.data.xpos[self.ct.R.mount, 2],
-        ]))
-        lift = end_mount_z - start_mount_z
-        contacts = self.arm_shelf_contacts()
-        self.gate(
-            "open_hands_lifted_clear_of_integrated_tier",
-            lift >= RELEASE_CLEARANCE_LIFT_M - 0.005
-            and not contacts,
-            f"lifted_mm={1000.0 * lift:.1f} contacts={contacts}",
-        )
+        left = self.grip_evidence("L")
+        right = self.grip_evidence("R")
+        for candidate_step in range(1, max_steps + 1):
+            if release_is_clear(left, right):
+                for _ in range(RELEASE_OPEN_FINAL_SETTLE_TICKS):
+                    self.frames(1)
+                    self.require_arms_clear_shelf(
+                        "guarded_release_clear_confirmation"
+                    )
+                left = self.grip_evidence("L")
+                right = self.grip_evidence("R")
+                if release_is_clear(left, right):
+                    release_clear_confirmed = True
+                    break
+            current_depth_margin = self.current_integrated_depth_margin()
+            self.gate(
+                "release_backoff_next_step_margin",
+                current_depth_margin
+                >= 0.005 + RELEASE_OPEN_BACKOFF_STEP_M,
+                f"step={candidate_step}/{max_steps} "
+                f"depth_margin_mm={1000.0 * current_depth_margin:.2f}",
+            )
+            self.move_mount_commands_delta(
+                [-RELEASE_OPEN_BACKOFF_STEP_M, 0.0, 0.0],
+                shelf_safe=True,
+            )
+            release_steps = candidate_step
+            current_depth_margin = self.current_integrated_depth_margin()
+            self.gate(
+                "release_backoff_depth_margin",
+                current_depth_margin >= 0.005,
+                f"step={candidate_step}/{max_steps} "
+                f"depth_margin_mm={1000.0 * current_depth_margin:.2f}",
+            )
+            left = self.grip_evidence("L")
+            right = self.grip_evidence("R")
+        if not release_clear_confirmed:
+            for _ in range(RELEASE_OPEN_FINAL_SETTLE_TICKS):
+                self.frames(1)
+                self.require_arms_clear_shelf(
+                    "guarded_release_final_settle"
+                )
 
         left = self.grip_evidence("L")
         right = self.grip_evidence("R")
+        actual_backoff = (
+            RELEASE_OPEN_INITIAL_BACKOFF_M
+            + release_steps * RELEASE_OPEN_BACKOFF_STEP_M
+        )
+        actual_open_lift = RELEASE_OPEN_CLEARANCE_LIFT_MAX_M
+        self.gates["release_contact_geometry"] = {
+            "steps": release_steps,
+            "backoff_m": actual_backoff,
+            "opening_lift_m": actual_open_lift,
+            "after_feedback_backoff": self.roll_pad_contact_geometry(),
+            "left": left,
+            "right": right,
+        }
         self.gate(
-            "released_during_guarded_lift",
-            not left["pads"]
-            and not right["pads"]
-            and left["force_n"] <= 0.05
-            and right["force_n"] <= 0.05,
+            "released_during_guarded_backoff",
+            release_is_clear(left, right),
             f"left={left['force_n']:.3f}N/{left['pads']} "
             f"right={right['force_n']:.3f}N/{right['pads']}",
         )
@@ -2921,11 +3155,46 @@ class SortingRollExpert:
             and after_checks["released_from_both_grippers"],
             json.dumps(after_open, ensure_ascii=False),
         )
-        self.gates["post_open_hand_lift_evidence"] = after_open
+        self.move_mount_commands_delta(
+            [
+                0.0,
+                0.0,
+                RELEASE_CLEARANCE_LIFT_M
+                - actual_open_lift,
+            ],
+            shelf_safe=True,
+        )
+        end_mount_z = float(np.mean([
+            self.data.xpos[self.ct.L.mount, 2],
+            self.data.xpos[self.ct.R.mount, 2],
+        ]))
+        lift = end_mount_z - start_mount_z
+        contacts = self.arm_shelf_contacts()
+        self.gate(
+            "open_hands_lifted_clear_of_integrated_tier",
+            lift >= RELEASE_CLEARANCE_LIFT_M - 0.005
+            and not contacts,
+            f"lifted_mm={1000.0 * lift:.1f} contacts={contacts}",
+        )
+        left = self.grip_evidence("L")
+        right = self.grip_evidence("R")
+        self.gate(
+            "released_during_guarded_lift",
+            release_is_clear(left, right),
+            f"left={left['force_n']:.3f}N/{left['pads']} "
+            f"right={right['force_n']:.3f}N/{right['pads']}",
+        )
+        self.gates["post_open_hand_lift_evidence"] = (
+            self.evaluate_placement(self.model, self.data)
+        )
 
 
-    def track_success(self, ticks=240):
-        tracker = self.tracker_cls()
+    def track_success(
+        self,
+        ticks=240,
+        required_seconds=REQUIRED_STABLE_SECONDS,
+    ):
+        tracker = self.tracker_cls(required_seconds=required_seconds)
         evidence = None
         for _ in range(int(ticks)):
             dt = self.tick()
@@ -2995,7 +3264,7 @@ class SortingRollExpert:
                 "recorded camera mounts do not match the SDK contract"
             )
 
-        self.frames(30)
+        self.frames(12)
 
         initial_targets = {
             hand: self.ct.qtgt[hand].copy()
@@ -3007,7 +3276,7 @@ class SortingRollExpert:
         self.go_to(
             TABLE_OBSERVATION_XY,
             -math.pi / 2.0,
-            max_speed=0.20,
+            max_speed=0.26,
         )
         target_motion = max(
             float(np.max(np.abs(self.ct.qtgt[hand] - initial_targets[hand])))
@@ -3040,7 +3309,7 @@ class SortingRollExpert:
         self.go_to(
             TABLE_GRASP_XY,
             -math.pi / 2.0,
-            max_speed=0.18,
+            max_speed=0.25,
             tolerance=0.003,
         )
         self.turn_in_place(
@@ -3073,7 +3342,7 @@ class SortingRollExpert:
         )
 
         self.phase("localize_roll_with_head_stereo")
-        self.frames(45)
+        self.frames(30)
 
         roll = self.roll_position()
         grasp_positions, rotations = self.flat_pick_mount_poses(roll)
@@ -3198,7 +3467,7 @@ class SortingRollExpert:
             f"cross_error_mm={1000.0 * corridor_cross_error:.2f} "
             f"target_y={corridor_base_y:.4f}",
         )
-        self.reverse(corridor_reverse_m, max_speed=0.20)
+        self.reverse(corridor_reverse_m, max_speed=0.26)
         base = self.ct.base_pose()
         self.gate(
             "shelf_corridor_staged",
@@ -3240,7 +3509,7 @@ class SortingRollExpert:
             f"travel_heading_deg={math.degrees(travel_heading):.2f}",
         )
         self.go_to(
-            shelf_base, 0.0, max_speed=0.22, tolerance=0.006
+            shelf_base, 0.0, max_speed=0.28, tolerance=0.006
         )
         self.require_held("shelf_translation")
         parked_base = self.ct.base_pose()
@@ -3360,7 +3629,9 @@ class SortingRollExpert:
         self.release_into_integrated_top_tier()
 
         self.phase("verify_after_guarded_release")
-        post_release_evidence = self.track_success()
+        post_release_evidence = self.track_success(
+            required_seconds=0.5,
+        )
         self.gates["post_guarded_release_evidence"] = post_release_evidence
         self.gate(
             "placed_after_guarded_release",
@@ -3414,23 +3685,24 @@ class SortingRollExpert:
             "sorting_roll_success_after_retract",
             self.final_evidence is not None
             and self.final_evidence.get("instantaneous_success") is True
-            and self.final_evidence.get("stable_seconds", 0.0) >= 0.5,
+            and self.final_evidence.get("stable_seconds", 0.0)
+            >= REQUIRED_STABLE_SECONDS,
             json.dumps(
                 self.final_evidence
                 or self.evaluate_placement(self.model, self.data),
                 ensure_ascii=False,
             ),
         )
-        self.frames(60)
         self.gate(
             "episode_under_two_minutes",
             self.sim_seconds <= 120.0,
             f"sim_seconds={self.sim_seconds:.3f}",
         )
-        self.gates["episode_under_one_minute_target"] = {
-            "passed": bool(self.sim_seconds <= 60.0),
-            "detail": f"sim_seconds={self.sim_seconds:.3f}",
-        }
+        self.gate(
+            "episode_under_one_minute",
+            self.sim_seconds <= 60.0,
+            f"sim_seconds={self.sim_seconds:.3f}",
+        )
         return True
 
     def encode_frame_video(self, frame_pattern, output_path):
@@ -3490,19 +3762,19 @@ class SortingRollExpert:
                 ),
             ])
             output = f"camera_{index}"
-            parent = SDK_SENSOR_EXTRINSICS_ZYX[camera]["parent_link"]
+            source = MODEL_CAMERA_SOURCES[camera]
+            role = CAMERA_ROLES[camera]
             filters.append(
                 f"[{index}:v]drawtext="
-                f"text='{camera} | SDK {parent}':"
+                f"text='{camera} | {role} | proxy={source}':"
                 f"x=10:y=10:fontsize={font_size}:fontcolor=white:"
                 f"box=1:boxcolor=black@0.65:boxborderw=5[{output}]"
             )
             labeled_streams.append(f"[{output}]")
         filters.append(
             "".join(labeled_streams)
-            + "xstack=inputs=4:layout="
-            + f"0_0|{width}_0|0_{height}|"
-            + f"{width}_{height}:fill=black[v]"
+            + "xstack=inputs=3:layout="
+            + f"0_0|{width}_0|{width // 2}_{height}:fill=black[v]"
         )
         command.extend([
             "-filter_complex",
@@ -3552,6 +3824,7 @@ class SortingRollExpert:
                     "sorting_roll_task.SortingRollSuccessTracker"
                 ),
                 "training_eligible": False,
+                "simulation_canary_eligible": bool(success),
                 "review_video": self.review_video.name,
                 "slot_visual_review_video": (
                     self.slot_visual_review_video.name
@@ -3578,7 +3851,10 @@ class SortingRollExpert:
             "task": "sorting_roll_cruzr",
             "task_version": TASK_VERSION,
             "seed": self.args.seed,
+            "scene_randomization": self.scene_randomization,
             "success": bool(success),
+            "training_eligible": False,
+            "simulation_canary_eligible": bool(success),
             "error": error,
             "num_frames": int(self.recorder.n),
             "sim_seconds": round(float(self.sim_seconds), 3),

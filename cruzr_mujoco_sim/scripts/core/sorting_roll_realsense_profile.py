@@ -2,7 +2,14 @@
 """Unverified dual-wrist RealSense candidate for Sorting Roll."""
 
 
-PROFILE_NAME = "sorting_roll_realsense_candidate_v1"
+PROFILE_NAME = "sorting_roll_d405_candidate_v1"
+D405_MODEL = "RealSense D405"
+D405_RGB_RESOLUTION_WH = (1280, 720)
+D405_RGB_FPS = 30
+D405_FOV_DEG = (87.0, 58.0)
+D405_IDEAL_RANGE_M = (0.07, 0.50)
+D405_SHUTTER = "global"
+D405_DEPTH_POLICY_INPUT = False
 
 # Logical dataset cameras are deliberately separate from the frozen CRUZR SDK
 # camera names. The two wrist sources are existing MuJoCo diagnostic mounts used
@@ -13,9 +20,12 @@ MODEL_CAMERA_SOURCES = {
     "right_wrist_realsense": "hand_right",
 }
 MODEL_CAMERA_OVERRIDES = {
+    "left_wrist_realsense": {
+        "fovy_deg": D405_FOV_DEG[1],
+    },
     "right_wrist_realsense": {
         "quat_wxyz": (-0.2642198, 0.1318878, 0.9134162, -0.2801147),
-        "fovy_deg": 75.0,
+        "fovy_deg": D405_FOV_DEG[1],
     },
 }
 CAMERA_ROLES = {
@@ -47,8 +57,10 @@ def apply_model_camera_overrides(mujoco, model):
             raise RuntimeError(
                 f"scene is missing candidate camera source: {source}"
             )
-        model.cam_quat[camera_id] = override["quat_wxyz"]
-        model.cam_fovy[camera_id] = override["fovy_deg"]
+        if "quat_wxyz" in override:
+            model.cam_quat[camera_id] = override["quat_wxyz"]
+        if "fovy_deg" in override:
+            model.cam_fovy[camera_id] = override["fovy_deg"]
 
 
 def profile_report():
@@ -70,6 +82,13 @@ def profile_report():
     }
     return {
         "profile": PROFILE_NAME,
+        "camera_model": D405_MODEL,
+        "d405_rgb_resolution_wh": list(D405_RGB_RESOLUTION_WH),
+        "d405_rgb_fps": D405_RGB_FPS,
+        "d405_fov_deg": list(D405_FOV_DEG),
+        "d405_ideal_range_m": list(D405_IDEAL_RANGE_M),
+        "d405_shutter": D405_SHUTTER,
+        "depth_policy_input": D405_DEPTH_POLICY_INPUT,
         "model_camera_sources": dict(MODEL_CAMERA_SOURCES),
         "model_camera_overrides": dict(MODEL_CAMERA_OVERRIDES),
         "camera_roles": dict(CAMERA_ROLES),
@@ -77,7 +96,7 @@ def profile_report():
         "hardware_verified": HARDWARE_VERIFIED,
         "training_eligible": TRAINING_ELIGIBLE,
         "simulation_mount_status": (
-            "asymmetric_historical_diagnostic_proxies_pending_real_model_and_mount"
+            "d405_intrinsics_with_asymmetric_proxy_extrinsics_pending_real_mount"
         ),
         "checks": checks,
         "passed": all(checks.values()),

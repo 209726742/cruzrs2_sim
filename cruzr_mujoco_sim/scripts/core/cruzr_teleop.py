@@ -739,6 +739,11 @@ REC_JPEG_Q = 90
 # combos never needs re-recording. Override via REC_CAMS env (comma-separated).
 REC_CAMS = os.environ.get(
     "REC_CAMS", "stereo_left,stereo_right,waist_front,hand_left,hand_right").split(",")
+REC_CAMERA_SOURCES = dict(
+    item.split("=", 1)
+    for item in os.environ.get("REC_CAMERA_SOURCES", "").split(",")
+    if item
+)
 REC_SAVE_RAW_TIMESTAMPS = os.environ.get("REC_SAVE_RAW_TIMESTAMPS", "0") == "1"
 REC_GPU = os.environ.get("TELEOP_RECORD_GPU", os.environ.get("MUJOCO_EGL_DEVICE_ID", "0"))
 REPO_ROOT = SAFE_VLA_ROOT
@@ -820,7 +825,14 @@ class EpisodeRecorder:
         self._scn = mujoco.MjvScene(m, maxgeom=20000)
         self._opt = mujoco.MjvOption()
         self._vp = mujoco.MjrRect(0, 0, W, H)
-        self._camids = {c: mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_CAMERA, c) for c in REC_CAMS}
+        self._camids = {
+            c: mujoco.mj_name2id(
+                m,
+                mujoco.mjtObj.mjOBJ_CAMERA,
+                REC_CAMERA_SOURCES.get(c, c),
+            )
+            for c in REC_CAMS
+        }
         missing = [c for c, i in self._camids.items() if i < 0]
         assert not missing, f"record cameras missing in model: {missing}"
         print(f"[REC] EGL offscreen render on GPU device {REC_GPU} ({W}x{H}) ready {REC_CAMS}",
@@ -904,7 +916,13 @@ class EpisodeRecorder:
                 "prompt": os.environ.get("REC_PROMPT", "pick up the parts and place it down"),
                 "fps": REC_FPS, "success": bool(success), "num_frames": n,
                 "resolution_hw": [REC_WH[1], REC_WH[0]],
-                "cameras": {c: f"{c} (mujoco fixed camera, EGL/GPU{REC_GPU})" for c in REC_CAMS},
+                "cameras": {
+                    c: (
+                        f"{c} <- {REC_CAMERA_SOURCES.get(c, c)} "
+                        f"(mujoco fixed camera, EGL/GPU{REC_GPU})"
+                    )
+                    for c in REC_CAMS
+                },
                 "state_joint_names": STATE_JOINT_NAMES,
                 "action_names": ACTION_NAMES,
                 "base_state_names": BASE_STATE_NAMES,

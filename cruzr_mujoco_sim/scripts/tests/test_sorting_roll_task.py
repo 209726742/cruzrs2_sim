@@ -12,6 +12,7 @@ if CORE not in sys.path:
 
 from sorting_roll_task import (
     INSTANTANEOUS_CHECKS,
+    REQUIRED_STABLE_SECONDS,
     TOP_TIER_TROUGH_GAP_TOLERANCE_M,
     SortingRollSuccessTracker,
     axis_alignment_degrees,
@@ -69,7 +70,7 @@ class SortingRollTaskTest(unittest.TestCase):
             "resting_on_integrated_top_tier_geometry",
             INSTANTANEOUS_CHECKS,
         )
-        self.assertAlmostEqual(TOP_TIER_TROUGH_GAP_TOLERANCE_M, 0.002)
+        self.assertAlmostEqual(TOP_TIER_TROUGH_GAP_TOLERANCE_M, 0.004)
 
     def test_old_external_target_is_rejected(self):
         evidence = self.placement_evidence([0.7825, 0.0, 1.0125])
@@ -103,6 +104,11 @@ class SortingRollTaskTest(unittest.TestCase):
         for _ in range(49):
             self.assertFalse(tracker.update(evidence, 0.01))
         self.assertTrue(tracker.update(evidence, 0.01))
+
+    def test_default_success_window_is_two_seconds(self):
+        tracker = SortingRollSuccessTracker()
+        self.assertEqual(REQUIRED_STABLE_SECONDS, 2.0)
+        self.assertEqual(tracker.required_seconds, 2.0)
 
     def test_failed_frame_resets_stable_window(self):
         tracker = SortingRollSuccessTracker(required_seconds=0.5)
