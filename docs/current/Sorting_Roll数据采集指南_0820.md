@@ -20,8 +20,10 @@
 seed 100–119 为 `20/20`，高于 `18/20` 准入线；平均 `58.088 s`，范围
 `56.233–58.800 s`。三路策略相机的完整视频回合 seed 120 已在 `58.5 s` 成功，
 相机可观测性审计覆盖 `54/54` 个采样点；LeRobot v2.1→v3.0 单回合构建、三路视频
-解码和真实 `LeRobotDataset` 加载均已通过。30 回合正式 canary 正在单张 4090 的 tmux
-会话中执行；当前数据仅具有仿真 canary 资格，不代表已经取得真机部署资格。
+解码和真实 `LeRobotDataset` 加载均已通过。首批 30 次渲染尝试为 `29/30`，补采
+seed 230 后得到 30 个合格源；专用 validator 为 `30/30 PASS`，LeRobot v3.0 数据集
+共 `52,121` 帧。单张 4090 的 20-step π0.5 短训练已正常结束；当前数据仅具有仿真
+canary 资格，不代表已经取得真机部署资格。
 
 当前旧 `dev026–dev069` 及重复帧/诊断缓存已经清理；文档后文出现的这些路径只保留为
 历史推导证据，不再保证产物仍在磁盘。
@@ -77,9 +79,19 @@ v9_d405_20seed_final_20260823/summary.json
 - LeRobot 构建入口：`scripts/collection/sorting_roll_build_v21.py`。每个通过的源回合只生成
   一个连续 episode，组合为 18 维状态/动作；三路 16:9 原始画面按比例缩放并补边到
   `224×224`，不做横向拉伸。单回合烟测已完成 v3.0 转换和真实数据加载。
-- 正式 30 回合目录：`output/sorting_roll_expert/v9_d405_canary30_final_seed0200_0229/`；
-  tmux 会话：`sorting_roll_v9_canary30_final`。以目录内原子更新的 `summary.json` 为实时
-  进度依据；只有全部采集结束且 validator 为 `30/30` 才进入正式构建和短训练。
+- 正式 30 次初始尝试位于
+  `output/sorting_roll_expert/v9_d405_canary30_final_seed0200_0229/`：seed 200–229 中
+  `29/30` 成功。seed 209 在进入一体式槽后因棒轴 X 分量为 `0.001482` 触发严格轴向门，
+  在 `48.267 s` 提前失败；它未被标记为 canary 合格，也未进入训练集。
+- 补采 seed 230 成功后，`selected_sources.json` 固定了恰好 30 个成功源；
+  `validation_report.json` 为 `30/30 PASS`。最终数据集位于
+  `out/datasets/sorting_roll_d405_canary30_lerobot_v30_20260823/`，为 LeRobot v3.0、
+  `52,121` 帧、三路 `224×224@30 FPS`、state/action 各 18 维，split 为
+  `23 train / 3 val / 4 test`，并已通过真实 `LeRobotDataset` 首尾解码。
+- 单卡 20-step π0.5 expert-only 短训练正常退出，20 个 loss/梯度测量均为有限值：
+  loss `0.706–6.939`，梯度范数 `8.491–54.714`，无 OOM、NaN 或视频解码错误。
+  作为低成本工程 canary，按设计未保存约 11 GB 的 checkpoint；训练日志位于
+  `log/pi05_sorting_roll_d405_canary30_20step_20260823.log`。
 
 ## 2026-08-23 双腕 RealSense 候选
 
