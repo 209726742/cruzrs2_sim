@@ -18,8 +18,10 @@
 不得浮空；松手后连续稳定至少 `2 s`；双手完全撤回；总仿真时长不超过 `60 s`。
 无扰动基准已在 `58.25 s` 内通过；最终连续复测 seed 3–7 为 `5/5`。正式动力学门
 seed 100–119 为 `20/20`，高于 `18/20` 准入线；平均 `58.088 s`，范围
-`56.233–58.800 s`。下一阶段才渲染并验收 `30–50` 个 canary、构建 LeRobot 数据集
-并进行单卡短训练；当前数据仅具有仿真 canary 资格，不代表已经取得真机部署资格。
+`56.233–58.800 s`。三路策略相机的完整视频回合 seed 120 已在 `58.5 s` 成功，
+相机可观测性审计覆盖 `54/54` 个采样点；LeRobot v2.1→v3.0 单回合构建、三路视频
+解码和真实 `LeRobotDataset` 加载均已通过。30 回合正式 canary 正在单张 4090 的 tmux
+会话中执行；当前数据仅具有仿真 canary 资格，不代表已经取得真机部署资格。
 
 当前旧 `dev026–dev069` 及重复帧/诊断缓存已经清理；文档后文出现的这些路径只保留为
 历史推导证据，不再保证产物仍在磁盘。
@@ -60,6 +62,24 @@ v9_d405_20seed_final_20260823/summary.json
   `output/sorting_roll_expert/v9_d405_release_recheck_pass2_seed0003_0007/summary.json`。
 - seed 100–119 正式门 `20/20`：无失败回合，全部满足同一成功合同和 `≤60 s` 硬门；
   证据位于 `output/sorting_roll_expert/v9_d405_20seed_final_20260823/summary.json`。
+
+### 当前 canary 与数据构建状态
+
+- 人工审核视频：`output/sorting_roll_expert/v9_d405_review_seed0120/sorting_roll_review.mp4`；
+  三路策略相机合成：同目录 `sorting_roll_robot_multiview.mp4`；槽位视觉近景：同目录
+  `sorting_roll_slot_visual_closeup.mp4`。该回合 `1755` 帧、`58.5 s`，第三视角和槽位
+  近景只用于审核，不进入策略输入。
+- 相机报告：`output/sorting_roll_expert/v9_d405_review_seed0120/camera_observability_d405_v9.json`；
+  54 个采样点的候选视角覆盖和必需角色覆盖均为 `54/54`，抓取接触、对准、插入和释放
+  四个关键阶段均有三路可用视角。报告仍明确标记腕部外参为仿真代理。
+- source validator：`scripts/collection/sorting_roll_validate.py`。它同时检查物理成功门、
+  三路相机、帧数、30 FPS 时间轴、相机—状态同步、非有限值、seed、随机化和元数据资格。
+- LeRobot 构建入口：`scripts/collection/sorting_roll_build_v21.py`。每个通过的源回合只生成
+  一个连续 episode，组合为 18 维状态/动作；三路 16:9 原始画面按比例缩放并补边到
+  `224×224`，不做横向拉伸。单回合烟测已完成 v3.0 转换和真实数据加载。
+- 正式 30 回合目录：`output/sorting_roll_expert/v9_d405_canary30_final_seed0200_0229/`；
+  tmux 会话：`sorting_roll_v9_canary30_final`。以目录内原子更新的 `summary.json` 为实时
+  进度依据；只有全部采集结束且 validator 为 `30/30` 才进入正式构建和短训练。
 
 ## 2026-08-23 双腕 RealSense 候选
 
