@@ -8,6 +8,7 @@ import numpy as np
 from sorting_roll_scene import (
     TARGET_AXIS,
     TARGET_CENTER,
+    TARGET_SMOKE_STEPS,
     TOP_TIER_BACK_INNER_X_M,
     TOP_TIER_FRONT_LIP_PEAK_Z_M,
     TOP_TIER_FRONT_LIP_X_M,
@@ -324,7 +325,7 @@ def place_roll_at_target(model, data, height_offset_m=0.002):
     mujoco.mj_forward(model, data)
 
 
-def target_placement_smoke(model, steps=1200):
+def target_placement_smoke(model, steps=TARGET_SMOKE_STEPS):
     import mujoco
 
     data = mujoco.MjData(model)

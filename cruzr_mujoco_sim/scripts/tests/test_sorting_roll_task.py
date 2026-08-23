@@ -18,6 +18,7 @@ from sorting_roll_task import (
     axis_alignment_degrees,
     evaluate_placement,
     fit_report,
+    target_placement_smoke,
 )
 
 import sorting_roll_scene as scene
@@ -109,6 +110,14 @@ class SortingRollTaskTest(unittest.TestCase):
         tracker = SortingRollSuccessTracker()
         self.assertEqual(REQUIRED_STABLE_SECONDS, 2.0)
         self.assertEqual(tracker.required_seconds, 2.0)
+
+    def test_default_target_smoke_reaches_the_stable_success_window(self):
+        _, evidence = target_placement_smoke(self.model)
+        self.assertTrue(evidence["success"], evidence)
+        self.assertGreaterEqual(
+            evidence["stable_seconds"],
+            evidence["required_stable_seconds"],
+        )
 
     def test_failed_frame_resets_stable_window(self):
         tracker = SortingRollSuccessTracker(required_seconds=0.5)

@@ -43,6 +43,7 @@ TARGET_CENTER = np.array([
 ])
 TARGET_AXIS = np.array([0.0, 1.0, 0.0])
 EXPECTED_EDGE_GAP_M = 0.475
+TARGET_SMOKE_STEPS = 2500
 
 
 def required_assets():
@@ -278,7 +279,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-only", action="store_true")
     parser.add_argument("--steps", type=int, default=1000)
-    parser.add_argument("--target-steps", type=int, default=1200)
+    parser.add_argument("--target-steps", type=int, default=TARGET_SMOKE_STEPS)
     parser.add_argument("--render", help="optional preview PNG path")
     args = parser.parse_args(argv)
     if args.steps < 1:
