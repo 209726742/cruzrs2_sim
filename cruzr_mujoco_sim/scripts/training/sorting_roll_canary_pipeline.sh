@@ -128,6 +128,7 @@ TRAIN_ARGS=(
   --decay-steps 20
   --save-freq 20
   --log-freq 1
+  --save-checkpoint false
   --allow-small-batch true
   --train-expert-only true
   --wandb false
@@ -150,6 +151,26 @@ if ! tail -n 20 "$TRAIN_LOG" | grep -Fq "train command exited rc=0"; then
   printf '%s\n' "$raise_message" >&2
   exit 1
 fi
+
+"$ISAAC_PY" - "$TRAIN_LOG" <<'PY'
+import math
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+losses = [float(value) for value in re.findall(r"\bloss:([^\s]+)", text)]
+gradients = [float(value) for value in re.findall(r"\bgrdn:([^\s]+)", text)]
+if not losses or not gradients:
+    raise SystemExit("training log has no loss/gradient measurements")
+if not all(math.isfinite(value) for value in losses + gradients):
+    raise SystemExit("training log contains non-finite loss/gradient")
+print(
+    f"training audit passed: measurements={len(losses)} "
+    f"loss_range={min(losses):.6g}..{max(losses):.6g} "
+    f"gradient_range={min(gradients):.6g}..{max(gradients):.6g}"
+)
+PY
 
 log "pipeline complete"
 bash "$PROJECT_ROOT/pi05_train.sh" status \
