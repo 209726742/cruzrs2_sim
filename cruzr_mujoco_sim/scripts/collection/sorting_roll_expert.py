@@ -772,6 +772,7 @@ def parse_args(argv=None):
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
     parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--review-videos", action="store_true")
     parser.add_argument("--randomize", action="store_true")
     args = parser.parse_args(argv)
     if args.seed < 1:
@@ -780,6 +781,8 @@ def parse_args(argv=None):
         parser.error("--gpu must be non-negative")
     if args.width < 224 or args.height < 224:
         parser.error("record dimensions must both be at least 224")
+    if args.no_render and args.review_videos:
+        parser.error("--review-videos requires rendering")
     return args
 
 
@@ -955,9 +958,10 @@ class SortingRollExpert:
         self.sim_seconds = 0.0
 
         self.out.mkdir(parents=True)
-        self.review_dir.mkdir(parents=True)
-        self.slot_visual_review_dir.mkdir(parents=True)
-        self.slot_physics_review_dir.mkdir(parents=True)
+        if args.review_videos:
+            self.review_dir.mkdir(parents=True)
+            self.slot_visual_review_dir.mkdir(parents=True)
+            self.slot_physics_review_dir.mkdir(parents=True)
         ct.REC_WH = (args.width, args.height)
         self.recorder = ct.EpisodeRecorder(str(self.out))
         ct.REC.update({
@@ -975,6 +979,7 @@ class SortingRollExpert:
                 "policy_cameras": list(POLICY_CAMERAS),
                 "policy_image_map": dict(POLICY_IMAGE_MAP),
                 "review_only_cameras": list(REVIEW_ONLY_CAMERAS),
+                "review_videos_enabled": bool(args.review_videos),
                 "recorded_cameras": list(RECORDED_CAMERAS),
                 "model_camera_sources": dict(MODEL_CAMERA_SOURCES),
                 "camera_roles": dict(CAMERA_ROLES),
@@ -1107,39 +1112,41 @@ class SortingRollExpert:
             self.recorded_roll_qvel.append(
                 self.data.qvel[self.roll_dof_adr:self.roll_dof_adr + 6].copy()
             )
-            render_third_person(
-                self.recorder,
-                self.mujoco,
-                self.model,
-                self.data,
-                self.review_camera,
-                self.review_dir / f"frame_{self.recorder.n - 1:06d}.jpg",
-                scene_option=self.visual_review_option,
-            )
-            render_third_person(
-                self.recorder,
-                self.mujoco,
-                self.model,
-                self.data,
-                self.slot_visual_review_camera,
-                self.slot_visual_review_dir
-                / f"frame_{self.recorder.n - 1:06d}.jpg",
-                scene_option=self.visual_review_option,
-            )
-            render_third_person(
-                self.recorder,
-                self.mujoco,
-                self.model,
-                self.data,
-                self.slot_physics_review_camera,
-                self.slot_physics_review_dir
-                / f"frame_{self.recorder.n - 1:06d}.jpg",
-                scene_option=self.slot_physics_review_option,
-                hidden_geom_ids=(
-                    self.shelf_visual_geom,
-                    *sorted(self.slot_visual_geom_ids),
-                ),
-            )
+            if self.args.review_videos:
+                render_third_person(
+                    self.recorder,
+                    self.mujoco,
+                    self.model,
+                    self.data,
+                    self.review_camera,
+                    self.review_dir
+                    / f"frame_{self.recorder.n - 1:06d}.jpg",
+                    scene_option=self.visual_review_option,
+                )
+                render_third_person(
+                    self.recorder,
+                    self.mujoco,
+                    self.model,
+                    self.data,
+                    self.slot_visual_review_camera,
+                    self.slot_visual_review_dir
+                    / f"frame_{self.recorder.n - 1:06d}.jpg",
+                    scene_option=self.visual_review_option,
+                )
+                render_third_person(
+                    self.recorder,
+                    self.mujoco,
+                    self.model,
+                    self.data,
+                    self.slot_physics_review_camera,
+                    self.slot_physics_review_dir
+                    / f"frame_{self.recorder.n - 1:06d}.jpg",
+                    scene_option=self.slot_physics_review_option,
+                    hidden_geom_ids=(
+                        self.shelf_visual_geom,
+                        *sorted(self.slot_visual_geom_ids),
+                    ),
+                )
         return dt
 
     def frames(self, count):
@@ -3726,18 +3733,19 @@ class SortingRollExpert:
         subprocess.run(command, check=True)
 
     def encode_review_videos(self):
-        self.encode_frame_video(
-            self.review_dir / "frame_%06d.jpg",
-            self.review_video,
-        )
-        self.encode_frame_video(
-            self.slot_visual_review_dir / "frame_%06d.jpg",
-            self.slot_visual_review_video,
-        )
-        self.encode_frame_video(
-            self.slot_physics_review_dir / "frame_%06d.jpg",
-            self.slot_physics_review_video,
-        )
+        if self.args.review_videos:
+            self.encode_frame_video(
+                self.review_dir / "frame_%06d.jpg",
+                self.review_video,
+            )
+            self.encode_frame_video(
+                self.slot_visual_review_dir / "frame_%06d.jpg",
+                self.slot_visual_review_video,
+            )
+            self.encode_frame_video(
+                self.slot_physics_review_dir / "frame_%06d.jpg",
+                self.slot_physics_review_video,
+            )
         for camera, video_path in self.robot_camera_videos.items():
             self.encode_frame_video(
                 self.out / "frames" / camera / "frame_%06d.jpg",
@@ -3825,12 +3833,17 @@ class SortingRollExpert:
                 ),
                 "training_eligible": False,
                 "simulation_canary_eligible": bool(success),
-                "review_video": self.review_video.name,
+                "review_video": (
+                    self.review_video.name
+                    if self.args.review_videos else None
+                ),
                 "slot_visual_review_video": (
                     self.slot_visual_review_video.name
+                    if self.args.review_videos else None
                 ),
                 "slot_physics_review_video": (
                     self.slot_physics_review_video.name
+                    if self.args.review_videos else None
                 ),
                 "robot_camera_videos": {
                     camera: path.name
@@ -3860,12 +3873,17 @@ class SortingRollExpert:
             "sim_seconds": round(float(self.sim_seconds), 3),
             "gates": self.gates,
             "final_evidence": self.final_evidence,
-            "review_video": str(self.review_video),
-            "slot_visual_review_video": str(
-                self.slot_visual_review_video
+            "review_video": (
+                str(self.review_video)
+                if self.args.review_videos else None
             ),
-            "slot_physics_review_video": str(
-                self.slot_physics_review_video
+            "slot_visual_review_video": (
+                str(self.slot_visual_review_video)
+                if self.args.review_videos else None
+            ),
+            "slot_physics_review_video": (
+                str(self.slot_physics_review_video)
+                if self.args.review_videos else None
             ),
             "robot_camera_videos": {
                 camera: str(path)

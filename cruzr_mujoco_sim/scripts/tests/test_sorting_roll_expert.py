@@ -88,6 +88,7 @@ from sorting_roll_expert import (
     insertion_axis_correction_has_clearance,
     mount_position_for_pad_target,
     joint_polyline_at_progress,
+    parse_args,
     rotation_x,
     rotation_axis_angle,
     rotation_z,
@@ -702,6 +703,19 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertIn("xstack=inputs=3", encode_source)
         self.assertIn("slot_visual_review_video", encode_source)
         self.assertIn("slot_physics_review_video", encode_source)
+        self.assertIn("if self.args.review_videos", encode_source)
+
+    def test_review_videos_require_rendering(self):
+        args = parse_args(["--out", "candidate"])
+        self.assertFalse(args.review_videos)
+        args = parse_args([
+            "--out", "review", "--review-videos",
+        ])
+        self.assertTrue(args.review_videos)
+        with self.assertRaises(SystemExit):
+            parse_args([
+                "--out", "invalid", "--no-render", "--review-videos",
+            ])
 
     def test_guarded_release_opens_before_lifting_and_retracting(self):
         source = (

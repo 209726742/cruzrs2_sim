@@ -8,7 +8,7 @@ import unittest
 COLLECTION_DIR = Path(__file__).resolve().parents[1] / "collection"
 sys.path.insert(0, str(COLLECTION_DIR))
 
-from sorting_roll_batch import result_errors
+from sorting_roll_batch import parse_args, result_errors
 
 
 def valid_result():
@@ -27,6 +27,17 @@ def valid_result():
 
 
 class SortingRollBatchTest(unittest.TestCase):
+    def test_review_videos_require_render_batch(self):
+        base = [
+            "--out-root", "candidate", "--count", "1",
+            "--min-success", "1",
+        ]
+        with self.assertRaises(SystemExit):
+            parse_args(base + ["--review-videos"])
+        args = parse_args(base + ["--render", "--review-videos"])
+        self.assertTrue(args.render)
+        self.assertTrue(args.review_videos)
+
     def test_result_requires_physics_stability_and_one_minute(self):
         self.assertEqual(result_errors(valid_result()), [])
 

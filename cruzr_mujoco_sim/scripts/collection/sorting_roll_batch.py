@@ -59,6 +59,7 @@ def parse_args(argv=None):
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--render", action="store_true")
+    parser.add_argument("--review-videos", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
     if args.seed_start < 1:
@@ -71,6 +72,8 @@ def parse_args(argv=None):
         parser.error("--gpu must be non-negative")
     if args.timeout < 1:
         parser.error("--timeout must be positive")
+    if args.review_videos and not args.render:
+        parser.error("--review-videos requires --render")
     return args
 
 
@@ -110,6 +113,8 @@ def main(argv=None):
             ]
             if not args.render:
                 command.append("--no-render")
+            if args.review_videos:
+                command.append("--review-videos")
             print(f"[batch] start seed={seed}", flush=True)
             try:
                 with log_path.open("w", encoding="utf-8") as output:
@@ -156,6 +161,7 @@ def main(argv=None):
                 and successes >= args.min_success
             ),
             "render": bool(args.render),
+            "review_videos": bool(args.review_videos),
             "records": records,
         }
         write_summary(summary_path, payload)
