@@ -717,6 +717,24 @@ class SortingRollExpertTest(unittest.TestCase):
                 "--out", "invalid", "--no-render", "--review-videos",
             ])
 
+    def test_finalize_synchronizes_nested_canary_eligibility(self):
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        finalize = source[
+            source.index("    def finalize"):
+            source.index("\ndef main")
+        ]
+        assignment = (
+            'self.ct.REC["metadata"]'
+            '["simulation_canary_eligible"] = bool('
+        )
+        self.assertIn(assignment, finalize)
+        self.assertLess(
+            finalize.index(assignment),
+            finalize.index("self.recorder.finalize"),
+        )
+
     def test_guarded_release_opens_before_lifting_and_retracting(self):
         source = (
             COLLECTION_DIR / "sorting_roll_expert.py"

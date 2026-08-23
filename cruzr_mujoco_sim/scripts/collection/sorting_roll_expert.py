@@ -3801,6 +3801,9 @@ class SortingRollExpert:
 
     def finalize(self, success, error=None):
         self.ct.REC["on"] = False
+        self.ct.REC["metadata"]["simulation_canary_eligible"] = bool(
+            success
+        )
         self.ct.REC["metadata"]["gates"] = self.gates
         self.ct.REC["metadata"]["final_evidence"] = self.final_evidence
         self.recorder.finalize(success=bool(success))
