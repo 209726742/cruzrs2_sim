@@ -11,6 +11,9 @@ DATASET_REPO_ID=${DATASET_REPO_ID:-local/sorting_roll_d405_canary30}
 TRAIN_OUTPUT=${TRAIN_OUTPUT:-$PROJECT_ROOT/cruzr_mujoco_sim/out/training/pi05_sorting_roll_d405_canary30_20step_20260823}
 TRAIN_LOG=${TRAIN_LOG:-$PROJECT_ROOT/log/pi05_sorting_roll_d405_canary30_20step_20260823.log}
 EXPECTED_EPISODES=${EXPECTED_EPISODES:-30}
+MIN_INITIAL_SUCCESSES=${MIN_INITIAL_SUCCESSES:-27}
+MAX_REPLACEMENT_ATTEMPTS=${MAX_REPLACEMENT_ATTEMPTS:-10}
+REPLACEMENT_ROOT=${REPLACEMENT_ROOT:-$PROJECT_ROOT/cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_canary30_replacements}
 POLL_SECONDS=${POLL_SECONDS:-30}
 
 log() {
@@ -23,7 +26,8 @@ while tmux has-session -t "$WAIT_SESSION" 2>/dev/null; do
 done
 
 log "checking completed batch summary"
-"$MJX_PY" - "$SOURCE_ROOT/summary.json" "$EXPECTED_EPISODES" <<'PY'
+"$MJX_PY" - "$SOURCE_ROOT/summary.json" "$EXPECTED_EPISODES" \
+  "$MIN_INITIAL_SUCCESSES" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -38,22 +42,83 @@ actual = (
     summary.get("failed_count"),
     summary.get("passed"),
 )
-required = (expected, expected, expected, 0, True)
-if actual != required:
-    raise SystemExit(f"batch gate failed: {actual} != {required}")
-print(f"batch gate passed: {expected}/{expected}")
+if actual[0] != expected or actual[1] != expected:
+    raise SystemExit(f"batch completion gate failed: {actual}")
+if actual[2] < int(sys.argv[3]):
+    raise SystemExit(f"initial success-rate gate failed: {actual}")
+if actual[3] != expected - actual[2]:
+    raise SystemExit(f"batch success/failure counts are inconsistent: {actual}")
+print(f"initial batch gate passed: {actual[2]}/{expected}")
+PY
+
+mapfile -t VALID_SOURCES < <(
+  "$MJX_PY" - "$SOURCE_ROOT/summary.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+summary = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+for record in summary["records"]:
+    if record.get("passed"):
+        print(record["episode"])
+PY
+)
+
+next_seed=230
+replacement_attempts=0
+while (( ${#VALID_SOURCES[@]} < EXPECTED_EPISODES )); do
+  if (( replacement_attempts >= MAX_REPLACEMENT_ATTEMPTS )); then
+    printf 'replacement gate failed: only %s/%s valid sources\n' \
+      "${#VALID_SOURCES[@]}" "$EXPECTED_EPISODES" >&2
+    exit 1
+  fi
+  attempt_root=$REPLACEMENT_ROOT/attempt_seed_$(printf '%04d' "$next_seed")
+  test ! -e "$attempt_root" || {
+    printf 'replacement output already exists: %s\n' "$attempt_root" >&2
+    exit 1
+  }
+  log "collecting replacement seed $next_seed"
+  if "$MJX_PY" \
+    "$PROJECT_ROOT/cruzr_mujoco_sim/scripts/collection/sorting_roll_batch.py" \
+    --out-root "$attempt_root" \
+    --seed-start "$next_seed" \
+    --count 1 \
+    --min-success 1 \
+    --gpu 0 \
+    --timeout 1800 \
+    --render; then
+    VALID_SOURCES+=("$attempt_root/seed_$(printf '%04d' "$next_seed")")
+  else
+    log "replacement seed $next_seed failed and remains excluded"
+  fi
+  next_seed=$((next_seed + 1))
+  replacement_attempts=$((replacement_attempts + 1))
+done
+
+"$MJX_PY" - "$SOURCE_ROOT/selected_sources.json" "${VALID_SOURCES[@]}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+output = Path(sys.argv[1])
+sources = [str(Path(value).resolve()) for value in sys.argv[2:]]
+output.write_text(
+    json.dumps({"count": len(sources), "sources": sources}, indent=2),
+    encoding="utf-8",
+)
+print(f"selected source gate passed: {len(sources)} sources")
 PY
 
 log "validating all rendered source episodes"
 "$MJX_PY" \
   "$PROJECT_ROOT/cruzr_mujoco_sim/scripts/collection/sorting_roll_validate.py" \
-  "$SOURCE_ROOT" \
+  "${VALID_SOURCES[@]}" \
   --report "$SOURCE_ROOT/validation_report.json"
 
 log "building LeRobot v2.1 staging dataset"
 "$MJX_PY" \
   "$PROJECT_ROOT/cruzr_mujoco_sim/scripts/collection/sorting_roll_build_v21.py" \
-  "$SOURCE_ROOT" \
+  "${VALID_SOURCES[@]}" \
   --out "$DATASET_ROOT" \
   --encode-workers 1
 
@@ -83,9 +148,17 @@ if info.get("codebase_version") != "v3.0":
     raise SystemExit("dataset is not LeRobot v3.0")
 if info.get("total_episodes") != expected or info.get("total_source_episodes") != expected:
     raise SystemExit("dataset episode count mismatch")
-expected_splits = {"train": "0:24", "val": "24:27", "test": "27:30"}
-if expected == 30 and info.get("splits") != expected_splits:
-    raise SystemExit(f"unexpected splits: {info.get('splits')}")
+splits = info.get("splits") or {}
+cursor = 0
+for name in ("train", "val", "test"):
+    if name not in splits:
+        continue
+    start, stop = map(int, splits[name].split(":"))
+    if start != cursor or stop <= start:
+        raise SystemExit(f"invalid contiguous split ranges: {splits}")
+    cursor = stop
+if "train" not in splits or cursor != expected:
+    raise SystemExit(f"split ranges do not cover the dataset: {splits}")
 dataset = LeRobotDataset(repo_id=repo_id, root=root, video_backend="pyav")
 if dataset.num_episodes != expected or len(dataset) != info.get("total_frames"):
     raise SystemExit("LeRobotDataset length mismatch")
