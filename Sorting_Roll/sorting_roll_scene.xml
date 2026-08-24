@@ -10,7 +10,7 @@
     Visual OBJ meshes are deliberately non-colliding; named primitive geoms in group 3
     are the physics representation.
   -->
-  <include file="cruzr_pgc140.xml"/>
+  <include file="sorting_roll_cruzr_pgc140.xml"/>
 
   <option timestep="0.001" integrator="implicitfast" cone="elliptic" impratio="10"/>
   <statistic center="0.45 -0.72 0.72" extent="2.4"/>

@@ -16,6 +16,56 @@ WORKSPACE_ROOT = PACKAGE_ROOT.parent
 SORTING_ROOT = WORKSPACE_ROOT / "Sorting_Roll"
 TEMPLATE_PATH = SORTING_ROOT / "sorting_roll_scene.xml"
 SCENE_PATH = PACKAGE_ROOT / "assets" / "sorting_roll_scene.xml"
+BASE_ROBOT_PATH = PACKAGE_ROOT / "assets" / "cruzr_pgc140.xml"
+TASK_ROBOT_PATH = PACKAGE_ROOT / "assets" / "sorting_roll_cruzr_pgc140.xml"
+WRIST_D405_OPTICAL_POS_M = np.array([0.0, -0.090, 0.070])
+WRIST_D405_OPTICAL_QUAT_WXYZ = np.array([0.5, 0.8660254, 0.0, 0.0])
+D405_MOUNT_TEMPLATE = """
+                            <!-- Sorting Roll-only D405 candidate constrained by the supplied installation diagram. -->
+                            <camera name="{camera}" pos="0 -0.090 0.070"
+                                    quat="0.5 0.8660254 0 0" fovy="58"/>
+                            <geom name="{side}_sorting_roll_d405_body_visual" type="box"
+                                  pos="0 -0.10342 0.06225" quat="0.5 0.8660254 0 0"
+                                  size="0.021 0.021 0.0115" contype="0" conaffinity="0"
+                                  group="5" density="0" rgba="0.32 0.36 0.40 0"/>
+                            <geom name="{side}_sorting_roll_d405_face_visual" type="box"
+                                  pos="0 -0.09416 0.06760" quat="0.5 0.8660254 0 0"
+                                  size="0.020 0.020 0.0008" contype="0" conaffinity="0"
+                                  group="5" density="0" rgba="0.03 0.04 0.05 0"/>
+                            <geom name="{side}_sorting_roll_d405_rail_visual" type="box"
+                                  pos="0 -0.061 -0.0025" size="0.018 0.002 0.0175"
+                                  contype="0" conaffinity="0" group="5" density="0"
+                                  rgba="0.22 0.24 0.27 0"/>
+                            <geom name="{side}_sorting_roll_d405_adapter_visual" type="box"
+                                  pos="0 -0.0872 0.03825" quat="0.8870 0.4617 0 0"
+                                  size="0.018 0.002 0.032"
+                                  contype="0" conaffinity="0" group="5" density="0"
+                                  rgba="0.22 0.24 0.27 0"/>
+                            <geom name="{side}_sorting_roll_d405_body_collision" type="box"
+                                  pos="0 -0.10342 0.06225" quat="0.5 0.8660254 0 0"
+                                  size="0.021 0.021 0.0115" contype="0" conaffinity="0"
+                                  group="5" density="0" rgba="0 0 0 0"/>
+                            <geom name="{side}_sorting_roll_d405_rail_collision" type="box"
+                                  pos="0 -0.061 -0.0025" size="0.018 0.002 0.0175"
+                                  contype="0" conaffinity="0" group="5" density="0"
+                                  rgba="0 0 0 0"/>
+                            <geom name="{side}_sorting_roll_d405_adapter_collision" type="box"
+                                  pos="0 -0.0872 0.03825" quat="0.8870 0.4617 0 0"
+                                  size="0.018 0.002 0.032"
+                                  contype="0" conaffinity="0" group="5" density="0"
+                                  rgba="0 0 0 0"/>"""
+D405_MOUNT_SPECS = (
+    (
+        "L",
+        "sorting_roll_left_wrist_d405",
+        "                            <camera name=\"hand_left_shelf\" pos=\"0.13 -0.13 0.04\" quat=\"0.5243 0.7607 0.3151 0.2172\" fovy=\"75\"/>",
+    ),
+    (
+        "R",
+        "sorting_roll_right_wrist_d405",
+        "                            <camera name=\"hand_right_shelf\" pos=\"0.13 0.13 0.04\" quat=\"0.2172 0.3151 0.7607 0.5243\" fovy=\"75\"/>",
+    ),
+)
 
 SHELF_BOUNDS = np.array([[0.8, -0.315, 0.0], [1.2, 0.315, 1.4]])
 TABLE_BOUNDS = np.array([[-0.3, -1.310, 0.0], [0.3, -0.790, 1.0]])
@@ -49,7 +99,7 @@ TARGET_SMOKE_STEPS = 2500
 def required_assets():
     return (
         TEMPLATE_PATH,
-        PACKAGE_ROOT / "assets" / "cruzr_pgc140.xml",
+        BASE_ROBOT_PATH,
         SORTING_ROOT / "Assets" / "Roll" / "Meshy_AI__0819075833_texture_obj"
         / "Meshy_AI__0819075833_texture_lowpoly.obj",
         SORTING_ROOT / "Assets" / "Roll" / "Meshy_AI__0819075833_texture_obj"
@@ -125,12 +175,28 @@ def layout_report():
     }
 
 
+def task_robot_xml(base_robot_xml):
+    if "sorting_roll_left_wrist_d405" in base_robot_xml:
+        raise ValueError("base robot asset already contains Sorting Roll mounts")
+    result = base_robot_xml
+    for side, camera, marker in D405_MOUNT_SPECS:
+        if result.count(marker) != 1:
+            raise ValueError(f"robot asset does not contain one {camera} marker")
+        result = result.replace(
+            marker,
+            marker + D405_MOUNT_TEMPLATE.format(side=side, camera=camera),
+        )
+    return result
+
+
 def materialize_scene(destination=SCENE_PATH):
     missing = [str(path) for path in required_assets() if not path.is_file()]
     if missing:
         raise FileNotFoundError("missing Sorting Roll assets:\n" + "\n".join(missing))
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    task_robot_path = destination.parent / TASK_ROBOT_PATH.name
+    task_robot_path.write_text(task_robot_xml(BASE_ROBOT_PATH.read_text()))
     shutil.copyfile(TEMPLATE_PATH, destination)
     return destination
 

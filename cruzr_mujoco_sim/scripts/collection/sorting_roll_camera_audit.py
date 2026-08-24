@@ -98,7 +98,10 @@ REQUIRED_ROLES_BY_STAGE = {
     "transport": {"global"},
     "placement_alignment": {"global", "left_wrist", "right_wrist"},
     "insertion": {"global", "left_wrist", "right_wrist"},
-    "release_confirmation": {"global", "left_wrist", "right_wrist"},
+    # The physical wrist-camera bodies can briefly occlude the head view while
+    # both wrist views still show release and settling. Head usability remains in
+    # the per-camera records but is not a per-frame release requirement.
+    "release_confirmation": {"left_wrist", "right_wrist"},
 }
 TARGET_POINTS_M = np.asarray(
     [
@@ -619,8 +622,8 @@ def run_audit(args):
         },
         "limitations": [
             "SDK camera intrinsics and real CameraInfo remain unverified",
-            "RealSense wrist views use unverified simulation proxy mounts",
-            "left and right simulation proxy mounts are asymmetric",
+            "D405 mounts follow the supplied installation diagram but lack CAD or measured transforms",
+            "proxy geometry omits exact screws, material, cable routing, and camera mass",
             "screening visibility does not prove pi0.5 learnability",
             "simulator truth is used only to measure visibility, not as policy input",
         ],

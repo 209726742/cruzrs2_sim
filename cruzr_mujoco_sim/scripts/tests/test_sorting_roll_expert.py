@@ -282,7 +282,7 @@ class SortingRollExpertTest(unittest.TestCase):
     def test_v11_target_is_sourced_from_scene_contract(self):
         self.assertEqual(
             TASK_VERSION,
-            "sorting_roll_v11_d405_upright_support_sim",
+            "sorting_roll_v12_d405_bracket_mount_sim",
         )
         np.testing.assert_allclose(TARGET_CENTER, SCENE_TARGET_CENTER)
 

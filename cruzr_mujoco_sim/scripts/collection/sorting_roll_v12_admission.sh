@@ -155,7 +155,7 @@ for record in records[:3]:
 import json
 import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-candidate = report["candidates"]["sorting_roll_d405_candidate_v2"]
+candidate = report["candidates"]["sorting_roll_d405_candidate_v3"]
 if report.get("replay_diversity", {}).get("matches_recorded") is not True:
     raise SystemExit("audit diversity replay mismatch")
 if candidate["coverage_fraction"] != 1.0:
@@ -216,7 +216,7 @@ for group in groups:
 
 report = {
     "schema_version": 1,
-    "task_version": "sorting_roll_v11_diverse_sim",
+    "task_version": "sorting_roll_v12_diverse_sim",
     "required_successes_per_group": 18,
     "required_attempts_per_group": 20,
     "required_camera_audits_per_group": 3,

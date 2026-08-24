@@ -131,6 +131,36 @@ class SortingRollSceneTest(unittest.TestCase):
             "sorting_roll_target",
         }.issubset(names))
 
+    def test_task_robot_adds_isolated_symmetric_d405_mounts(self):
+        base_xml = scene.BASE_ROBOT_PATH.read_text()
+        self.assertNotIn("sorting_roll_left_wrist_d405", base_xml)
+        root = ET.fromstring(scene.task_robot_xml(base_xml))
+        parents = {child: parent for parent in root.iter() for child in parent}
+        cameras = {
+            element.attrib["name"]: element
+            for element in root.iter("camera")
+            if element.attrib.get("name", "").startswith("sorting_roll_")
+        }
+        self.assertEqual(
+            set(cameras),
+            {"sorting_roll_left_wrist_d405", "sorting_roll_right_wrist_d405"},
+        )
+        for camera, parent in (
+            ("sorting_roll_left_wrist_d405", "L_pgc140_mount"),
+            ("sorting_roll_right_wrist_d405", "R_pgc140_mount"),
+        ):
+            self.assertEqual(parents[cameras[camera]].attrib["name"], parent)
+            np.testing.assert_allclose(
+                np.fromstring(cameras[camera].attrib["pos"], sep=" "),
+                scene.WRIST_D405_OPTICAL_POS_M,
+            )
+            np.testing.assert_allclose(
+                np.fromstring(cameras[camera].attrib["quat"], sep=" "),
+                scene.WRIST_D405_OPTICAL_QUAT_WXYZ,
+            )
+        include = ET.parse(scene.TEMPLATE_PATH).getroot().find("include")
+        self.assertEqual(include.attrib["file"], scene.TASK_ROBOT_PATH.name)
+
     def test_template_uses_separate_lowpoly_visual_meshes(self):
         root = ET.parse(scene.TEMPLATE_PATH).getroot()
         mesh_files = {

@@ -16,6 +16,7 @@ from sorting_roll_camera_audit import (
     phase_spans,
     principal_extent,
     project_points,
+    REQUIRED_ROLES_BY_STAGE,
     sampled_indices,
     stage_phase_gaps,
     wrist_observation_is_usable,
@@ -129,6 +130,12 @@ class SortingRollCameraAuditTest(unittest.TestCase):
         records[-1]["usable"] = True
         report = aggregate_candidate(records, ("head", "left", "right"))
         self.assertEqual(report["required_role_covered"], 1)
+
+    def test_release_requires_both_wrist_views_not_a_brief_head_view(self):
+        self.assertEqual(
+            REQUIRED_ROLES_BY_STAGE["release_confirmation"],
+            {"left_wrist", "right_wrist"},
+        )
 
 
 if __name__ == "__main__":
