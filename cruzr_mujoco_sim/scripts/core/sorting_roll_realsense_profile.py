@@ -2,7 +2,7 @@
 """Installation-diagram-constrained dual-wrist D405 candidate for Sorting Roll."""
 
 
-PROFILE_NAME = "sorting_roll_d405_candidate_v3"
+PROFILE_NAME = "sorting_roll_d405_candidate_v4"
 D405_MODEL = "RealSense D405"
 D405_RGB_RESOLUTION_WH = (1280, 720)
 D405_RGB_FPS = 30
@@ -18,7 +18,7 @@ MODEL_CAMERA_SOURCES = {
     "left_wrist_realsense": "sorting_roll_left_wrist_d405",
     "right_wrist_realsense": "sorting_roll_right_wrist_d405",
 }
-WRIST_D405_OPTICAL_POS_M = (0.0, -0.090, 0.070)
+WRIST_D405_OPTICAL_POS_M = (0.0, -0.180, 0.070)
 WRIST_D405_OPTICAL_QUAT_WXYZ = (0.5, 0.8660254, 0.0, 0.0)
 MODEL_CAMERA_OVERRIDES = {
     "left_wrist_realsense": {

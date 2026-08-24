@@ -1,17 +1,18 @@
 # Sorting Roll 正式数据采集与 π0.5 训练指南
 
-> 状态：2026-08-25 完成 v12 安装图约束双腕 D405 基线复核。后续 Sorting Roll 仿真采集、数据验收和 π0.5 训练以本文档为准。历史推导与调试过程见 `docs/current/Sorting_Roll数据采集指南_0820.md`。
+> 状态：2026-08-25 v13 高风险 pilot 已通过，5×20 四卡准入正在 tmux 中运行；只有准入报告、300 回合源数据、LeRobot v3.0 审计及 π0.5 短训练全部通过后，才允许开始长训练。后续 Sorting Roll 仿真采集、数据验收和训练以本文档为准。
 
-`sorting_roll_v12_d405_bracket_mount_sim` 已完成随机化单回合最终 pilot：左右 D405 安装到各自 `pgc140_mount` 的对称任务专用支架，三路审核视频保持上方头部、下方左右腕布局；seed 1402 在 58.1 秒内成功，validator 1/1 通过，相机审计 54/54 覆盖且所需角色覆盖率为 100%。v12 仍必须完成 5×20 准入、正式采集、数据构建和短训练，才能开始长训练。此前 v10 的 300 回合数据与 20→40 步短训练只作为历史证据保留，禁止与 v12 混用。
+v12 的 5×20 物理准入为 97/100，但真实轨迹回放暴露腕部相机在插入/释放阶段看不到一体式槽接触区，因此被相机硬门拒绝。v13 仅将双腕 D405 沿安装支架后移 90 mm，保持安装方向、任务语义、成功标准和专家动作不变。高风险 heavy/low-friction boundary seed 10084 在 58.47 秒内成功，validator 1/1 通过，相机审计 54/54、所需角色 54/54，平均每个关键样本有 2.81 路可用视角。v12 数据不得改标签或混入 v13。
 
 ## 1. 已定版的基线与版本边界
 
 - `sorting_roll_v9_d405_sim` 是历史动作与一体式槽位基线。
 - `sorting_roll_v10_diverse_sim` 是已完成 300 回合与短训练验证的历史多样性版本。
 - `sorting_roll_v11_d405_upright_support_sim` 是历史视觉基线，只使用旧诊断相机代理。
-- `sorting_roll_v12_d405_bracket_mount_sim` / `sorting_roll_v12_diverse_sim` 是当前基线：左右腕各使用独立、对称的任务专用 D405，相机父节点分别为 `L_pgc140_mount` / `R_pgc140_mount`；D405 外壳、顶部滑轨和上扬转接板均有可见与碰撞代理。
-- v12 外参在夹爪安装坐标系中为 `pos=(0, -0.090, 0.070) m`、`quat_wxyz=(0.5, 0.8660254, 0, 0)`；该值由安装图、D405 外形和成功轨迹可观测性共同约束，尚未由实机 CAD 或尺量标定。
-- v9、v10、v11、v12 不得混入同一个 campaign 或 dataset；任何策略图像、场景几何或相机外参变化都必须提升版本并重新准入。
+- `sorting_roll_v12_d405_bracket_mount_sim` 是被拒绝的安装图初始候选；物理成功不能覆盖其插入/释放阶段的可观测性缺陷。
+- `sorting_roll_v13_d405_rearward_mount_sim` / `sorting_roll_v13_diverse_sim` 是当前基线：左右腕各使用独立、对称的任务专用 D405，相机父节点分别为 `L_pgc140_mount` / `R_pgc140_mount`；D405 外壳、顶部滑轨和加长转接板均有可见与碰撞代理。
+- v13 外参在夹爪安装坐标系中为 `pos=(0, -0.180, 0.070) m`、`quat_wxyz=(0.5, 0.8660254, 0, 0)`；相对 v12 只沿支架后移 90 mm，以恢复一体式槽的上下文视野。该值已通过仿真轨迹审计，尚未由实机 CAD 或尺量标定。
+- v9、v10、v11、v12、v13 不得混入同一个 campaign 或 dataset；任何策略图像、场景几何或相机外参变化都必须提升版本并重新准入。
 - 策略输入固定为三路 RGB：
   - `observation.images.stereo_left`
   - `observation.images.left_wrist_realsense`
@@ -34,21 +35,21 @@
 
 ## 2. 正式采集目标
 
-v12 第一阶段采集 **300 个通过 validator 的多样化成功回合**：
+v13 第一阶段采集 **300 个通过 validator 的多样化成功回合**：
 
 - train：240 个；seed 末位不是 `0` 或 `1`。
 - val：30 个；seed 末位为 `1`。
 - test：30 个；seed 末位为 `0`。
-- 建议 v12 正式 seed 使用 `2000–2299`；补采从 `2300` 开始，不能复用失败 seed。
+- 建议 v13 正式 seed 使用 `2000–2299`；补采从 `2300` 开始，不能复用失败 seed。
 - 初始尝试成功率至少 `90%`；最终构建必须恰好选出 300 个成功且互不重复的源回合。
 
-其中 240 个 train 回合进入优化器，val/test 只用于选型和最终评测；把全部 300 个回合都用于梯度更新会造成评测泄漏。现有 v9 canary 和 v10 正式数据继续作为历史证据，不自动混入 v12。300 回合用于验证数据、训练和闭环评测管线，不代表数据量一定足够。只有测试集闭环成功率和分层成功率达标后，才扩大到 1,000 回合以上。
+其中 240 个 train 回合进入优化器，val/test 只用于选型和最终评测；把全部 300 个回合都用于梯度更新会造成评测泄漏。现有 v9 canary 和 v10 正式数据继续作为历史证据，不自动混入 v13。300 回合用于验证数据、训练和闭环评测管线，不代表数据量一定足够。只有测试集闭环成功率和分层成功率达标后，才扩大到 1,000 回合以上。
 
 ## 3. 多样性要求
 
 ### 3.1 基础位姿随机化
 
-当前 v12 保留以下确定性 seed 随机化：
+当前 v13 保留以下确定性 seed 随机化：
 
 | 维度 | 当前范围 |
 | --- | --- |
@@ -59,9 +60,9 @@ v12 第一阶段采集 **300 个通过 validator 的多样化成功回合**：
 
 这些基础位姿变化足以做 pilot，但不足以满足“多种类数据”的正式要求。因此，正式采集必须使用下一节的分层 manifest。
 
-### 3.2 v12 沿用的分层配置
+### 3.2 v13 沿用的分层配置
 
-`sorting_roll_v12_diverse_sim` 沿用已经验证过的 v10 多样性范围和配额，只把任务基线切换为 v12 的对称 D405 安装外参、任务专用相机支架及其碰撞代理；不改变任务语义、成功标准和专家动作结构。
+`sorting_roll_v13_diverse_sim` 沿用已经验证过的 v10 多样性范围和配额，只把任务基线切换为 v13 的对称 D405 安装外参、任务专用相机支架及其碰撞代理；不改变任务语义、成功标准和专家动作结构。
 
 300 个回合应由 campaign manifest 预先分配，而不是事后查看随机结果。以下每一行都是覆盖约束，各维度可以交叉组合：
 
@@ -103,9 +104,9 @@ v12 第一阶段采集 **300 个通过 validator 的多样化成功回合**：
 
 ```bash
 ROOT=/share/home/tm1128689517650000/a852937540/cruzr_sim
-ADMISSION_ROOT=$ROOT/cruzr_mujoco_sim/output/sorting_roll_expert/v12_diverse_admission_20260825
-tmux new-session -d -s sorting_roll_v12_admission \
-  "cd '$ROOT' && bash cruzr_mujoco_sim/scripts/collection/sorting_roll_v12_admission.sh \
+ADMISSION_ROOT=$ROOT/cruzr_mujoco_sim/output/sorting_roll_expert/v13_diverse_admission_20260825
+tmux new-session -d -s sorting_roll_v13_admission \
+  "cd '$ROOT' && bash cruzr_mujoco_sim/scripts/collection/sorting_roll_v13_admission.sh \
     --out-root '$ADMISSION_ROOT' --gpu 0 > '$ADMISSION_ROOT/admission.log' 2>&1"
 ```
 
@@ -117,7 +118,7 @@ tmux new-session -d -s sorting_roll_v12_admission \
 - 8×4090 只在以下情况使用：目标扩大到 1,000 回合以上、4 卡预估无法满足截止时间，或已经确认 CPU、文件系统和 JPEG 写入不是瓶颈。
 - 单张 4090 同时只运行一个渲染 shard。增加同卡并发通常会放大显存、EGL 和 I/O 风险。
 - 多卡只缩短采集墙钟时间，不改变 seed、数据分布、成功标准或格式。
-- 本机 GPU 0–3 的 4×4090 采集与短训练链路已在 v10 验证；v12 当前只完成单卡最终 pilot，必须先完成 v12 准入。若迁移到 8 卡机器，还必须重新执行环境检查和 DDP canary。
+- 本机 GPU 0–3 的 4×4090 采集与短训练链路已在 v10 验证；v13 当前完成单卡高风险 pilot，5×20 准入正在四卡运行。若迁移到 8 卡机器，还必须重新执行环境检查和 DDP canary。
 
 ## 5. 采集前检查
 
@@ -151,7 +152,7 @@ PY=$ROOT/envs/mjx/bin/python
 GPU_COUNT=4
 TOTAL=300
 FIRST_SEED=2000
-CAMPAIGN=sorting_roll_v12_diverse300_$(date -u +%Y%m%d)
+CAMPAIGN=sorting_roll_v13_diverse300_$(date -u +%Y%m%d)
 RAW_ROOT=$ROOT/cruzr_mujoco_sim/output/sorting_roll_expert/$CAMPAIGN
 LOG_ROOT=$ROOT/log/$CAMPAIGN
 MANIFEST=$RAW_ROOT/campaign_manifest.json
@@ -252,7 +253,7 @@ failed_count=0
 passed=true
 ```
 
-v12 validator 会核对 manifest 与 episode assignment、实际应用的物理/视觉参数、prompt 和 campaign 完全一致，并输出各 diversity stratum 的数量。只要有重复 seed、混合版本、混合 campaign、缺失类别或分层偏斜，就停止构建。
+v13 validator 会核对 manifest 与 episode assignment、实际应用的物理/视觉参数、prompt 和 campaign 完全一致，并输出各 diversity stratum 的数量。只要有重复 seed、混合版本、混合 campaign、缺失类别或分层偏斜，就停止构建。
 
 ## 9. π0.5 数据格式契约
 
@@ -283,7 +284,7 @@ seed_xxxx/
 构建 v2.1 staging 数据集：
 
 ```bash
-DATASET_V21=$ROOT/cruzr_mujoco_sim/out/datasets/sorting_roll_v12_diverse300_lerobot_v21
+DATASET_V21=$ROOT/cruzr_mujoco_sim/out/datasets/sorting_roll_v13_diverse300_lerobot_v21
 "$PY" cruzr_mujoco_sim/scripts/collection/sorting_roll_build_v21.py \
   "${SOURCES[@]}" --out "$DATASET_V21" --encode-workers 4 \
   --manifest "$MANIFEST"
@@ -293,8 +294,8 @@ DATASET_V21=$ROOT/cruzr_mujoco_sim/out/datasets/sorting_roll_v12_diverse300_lero
 
 ```bash
 ISAAC_PY=/isaac-sim/python.sh
-REPO_ID=local/sorting_roll_v12_diverse300
-DATASET=$ROOT/cruzr_mujoco_sim/out/datasets/sorting_roll_v12_diverse300_lerobot_v30
+REPO_ID=local/sorting_roll_v13_diverse300
+DATASET=$ROOT/cruzr_mujoco_sim/out/datasets/sorting_roll_v13_diverse300_lerobot_v30
 cp -a "$DATASET_V21" "$DATASET"
 PYTHONPATH=. "$ISAAC_PY" \
   src/lerobot/datasets/v30/convert_dataset_v21_to_v30.py \
@@ -314,8 +315,8 @@ bash pi05_train.sh dry-run \
   --batch-size 1 --num-workers 2 --allow-small-batch true \
   --steps 20 --warmup-steps 2 --decay-steps 20 \
   --save-freq 20 --train-expert-only true \
-  --output-dir cruzr_mujoco_sim/out/training/pi05_sorting_roll_v12_canary \
-  --log-file log/pi05_sorting_roll_v12_canary.log
+  --output-dir cruzr_mujoco_sim/out/training/pi05_sorting_roll_v13_canary \
+  --log-file log/pi05_sorting_roll_v13_canary.log
 ```
 
 `dry-run` 通过后把动作改为 `start`。canary 必须满足：
@@ -325,7 +326,7 @@ bash pi05_train.sh dry-run \
 - checkpoint 完整可读取，并能从该 checkpoint 恢复到至少第 40 步。
 - 训练只使用 train split，val/test 不得进入优化器。
 
-v10 的 2026-08-25 历史实测中，训练只读取 train split 的 240 个回合；fresh 20-step 与 20→40-step resume 均以退出码 0 完成。该结果只证明旧版本的数据加载、DDP、保存与恢复链路可用；v12 必须重新执行本节 canary，不得继承 v10 的训练通过结论。
+v10 的 2026-08-25 历史实测中，训练只读取 train split 的 240 个回合；fresh 20-step 与 20→40-step resume 均以退出码 0 完成。该结果只证明旧版本的数据加载、DDP、保存与恢复链路可用；v13 必须重新执行本节 canary，不得继承 v10 的训练通过结论。
 
 只有 4 卡 canary 稳定后才考虑 8 卡。8 卡需要重新做 DDP canary；不得假定卡数翻倍就一定更省钱或更快。
 
@@ -357,14 +358,14 @@ v10 的 2026-08-25 历史实测中，训练只读取 train split 的 240 个回�
 
 ## 13. 当前保留的定版证据
 
-v12 当前基线证据：
+v13 当前基线证据：
 
-- `cruzr_mujoco_sim/output/sorting_roll_expert/v12_d405_bracket_randomized_final_seed1402_20260825/seed_1402/sorting_roll_robot_multiview.mp4`（最终三路审核视频：1280×720、30 FPS、1743 帧、58.1 秒）
-- `cruzr_mujoco_sim/output/sorting_roll_expert/v12_d405_bracket_randomized_final_seed1402_20260825/seed_1402/sorting_roll_review.mp4`（第三视角，可见双腕 D405 与支架代理）
-- `cruzr_mujoco_sim/output/sorting_roll_expert/v12_d405_bracket_randomized_final_seed1402_20260825/validation_report.json`（validator 1/1 通过）
-- `cruzr_mujoco_sim/output/sorting_roll_expert/v12_d405_bracket_randomized_final_seed1402_20260825/seed_1402/camera_observability.json`（54/54 覆盖，所需相机角色覆盖率 100%）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/v13_diverse_admission_20260825_4gpu/groups/dynamics_heavy_low_friction/seed_10084/sorting_roll_robot_multiview.mp4`（高风险 boundary 三路审核视频：1280×720、30 FPS、58.47 秒）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/v13_diverse_admission_20260825_4gpu/groups/dynamics_heavy_low_friction/seed_10084/pilot_validator_report.json`（validator 1/1 通过）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/v13_diverse_admission_20260825_4gpu/groups/dynamics_heavy_low_friction/seed_10084/camera_observability.json`（54/54 覆盖，所需相机角色 54/54，平均 2.81 路可用视角）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/v12_diverse_admission_20260825_4gpu/`（拒绝证据：物理 97/100，但首个重放审计仅 90.2% 总覆盖、70.6% 所需角色覆盖，无准入报告）
 
-v10 历史证据（不可混入 v12）：
+v10 历史证据（不可混入 v13）：
 
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v10_diverse_admission_20260824/`（5×20 准入已通过：98/100 成功，validator 与每组 3 回合相机审计通过）
 - `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v10_diverse300_20260824_4gpu/`（正式 300 回合四卡采集完成：初采 295/300，通过 5 个定向补采恢复为 300/300；train/val/test 为 240/30/30）

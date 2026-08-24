@@ -18,18 +18,18 @@ TEMPLATE_PATH = SORTING_ROOT / "sorting_roll_scene.xml"
 SCENE_PATH = PACKAGE_ROOT / "assets" / "sorting_roll_scene.xml"
 BASE_ROBOT_PATH = PACKAGE_ROOT / "assets" / "cruzr_pgc140.xml"
 TASK_ROBOT_PATH = PACKAGE_ROOT / "assets" / "sorting_roll_cruzr_pgc140.xml"
-WRIST_D405_OPTICAL_POS_M = np.array([0.0, -0.090, 0.070])
+WRIST_D405_OPTICAL_POS_M = np.array([0.0, -0.180, 0.070])
 WRIST_D405_OPTICAL_QUAT_WXYZ = np.array([0.5, 0.8660254, 0.0, 0.0])
 D405_MOUNT_TEMPLATE = """
                             <!-- Sorting Roll-only D405 candidate constrained by the supplied installation diagram. -->
-                            <camera name="{camera}" pos="0 -0.090 0.070"
+                            <camera name="{camera}" pos="0 -0.180 0.070"
                                     quat="0.5 0.8660254 0 0" fovy="58"/>
                             <geom name="{side}_sorting_roll_d405_body_visual" type="box"
-                                  pos="0 -0.10342 0.06225" quat="0.5 0.8660254 0 0"
+                                  pos="0 -0.19342 0.06225" quat="0.5 0.8660254 0 0"
                                   size="0.021 0.021 0.0115" contype="0" conaffinity="0"
                                   group="5" density="0" rgba="0.32 0.36 0.40 0"/>
                             <geom name="{side}_sorting_roll_d405_face_visual" type="box"
-                                  pos="0 -0.09416 0.06760" quat="0.5 0.8660254 0 0"
+                                  pos="0 -0.18416 0.06760" quat="0.5 0.8660254 0 0"
                                   size="0.020 0.020 0.0008" contype="0" conaffinity="0"
                                   group="5" density="0" rgba="0.03 0.04 0.05 0"/>
                             <geom name="{side}_sorting_roll_d405_rail_visual" type="box"
@@ -37,12 +37,12 @@ D405_MOUNT_TEMPLATE = """
                                   contype="0" conaffinity="0" group="5" density="0"
                                   rgba="0.22 0.24 0.27 0"/>
                             <geom name="{side}_sorting_roll_d405_adapter_visual" type="box"
-                                  pos="0 -0.0872 0.03825" quat="0.8870 0.4617 0 0"
-                                  size="0.018 0.002 0.032"
+                                  pos="0 -0.126 0.038" quat="0.8150 0.5795 0 0"
+                                  size="0.018 0.002 0.070"
                                   contype="0" conaffinity="0" group="5" density="0"
                                   rgba="0.22 0.24 0.27 0"/>
                             <geom name="{side}_sorting_roll_d405_body_collision" type="box"
-                                  pos="0 -0.10342 0.06225" quat="0.5 0.8660254 0 0"
+                                  pos="0 -0.19342 0.06225" quat="0.5 0.8660254 0 0"
                                   size="0.021 0.021 0.0115" contype="0" conaffinity="0"
                                   group="5" density="0" rgba="0 0 0 0"/>
                             <geom name="{side}_sorting_roll_d405_rail_collision" type="box"
@@ -50,8 +50,8 @@ D405_MOUNT_TEMPLATE = """
                                   contype="0" conaffinity="0" group="5" density="0"
                                   rgba="0 0 0 0"/>
                             <geom name="{side}_sorting_roll_d405_adapter_collision" type="box"
-                                  pos="0 -0.0872 0.03825" quat="0.8870 0.4617 0 0"
-                                  size="0.018 0.002 0.032"
+                                  pos="0 -0.126 0.038" quat="0.8150 0.5795 0 0"
+                                  size="0.018 0.002 0.070"
                                   contype="0" conaffinity="0" group="5" density="0"
                                   rgba="0 0 0 0"/>"""
 D405_MOUNT_SPECS = (

@@ -60,7 +60,7 @@ from sorting_roll_realsense_profile import (
 from sorting_roll_task import REQUIRED_STABLE_SECONDS
 
 
-TASK_VERSION = "sorting_roll_v12_d405_bracket_mount_sim"
+TASK_VERSION = "sorting_roll_v13_d405_rearward_mount_sim"
 POLICY_CAMERAS = tuple(MODEL_CAMERA_SOURCES)
 REVIEW_ONLY_CAMERAS = ("third_person",)
 RECORDED_CAMERAS = POLICY_CAMERAS

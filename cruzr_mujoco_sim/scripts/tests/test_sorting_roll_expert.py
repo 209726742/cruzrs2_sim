@@ -279,10 +279,10 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             joint_polyline_at_progress(waypoints, -0.01)
-    def test_v11_target_is_sourced_from_scene_contract(self):
+    def test_v13_target_is_sourced_from_scene_contract(self):
         self.assertEqual(
             TASK_VERSION,
-            "sorting_roll_v12_d405_bracket_mount_sim",
+            "sorting_roll_v13_d405_rearward_mount_sim",
         )
         np.testing.assert_allclose(TARGET_CENTER, SCENE_TARGET_CENTER)
 
@@ -333,7 +333,7 @@ class SortingRollExpertTest(unittest.TestCase):
                 self.assertLessEqual(float(normalized.max()), upper)
                 self.assertGreaterEqual(float(normalized.max()), lower)
 
-    def test_v11_records_three_d405_candidate_policy_cameras(self):
+    def test_v13_records_three_d405_candidate_policy_cameras(self):
         self.assertEqual(
             POLICY_CAMERAS,
             (
@@ -345,7 +345,7 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertEqual(REVIEW_ONLY_CAMERAS, ("third_person",))
         self.assertEqual(RECORDED_CAMERAS, POLICY_CAMERAS)
 
-    def test_v11_global_camera_mount_matches_sdk_extrinsics(self):
+    def test_v13_global_camera_mount_matches_sdk_extrinsics(self):
         import mujoco
 
         model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))

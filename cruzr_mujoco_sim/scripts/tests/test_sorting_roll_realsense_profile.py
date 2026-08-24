@@ -62,13 +62,14 @@ class SortingRollRealSenseProfileTest(unittest.TestCase):
 
     def test_unverified_simulation_candidate_is_not_training_eligible(self):
         report = profile_report()
-        self.assertEqual(report["profile"], "sorting_roll_d405_candidate_v3")
+        self.assertEqual(report["profile"], "sorting_roll_d405_candidate_v4")
         self.assertTrue(report["passed"])
         self.assertFalse(HARDWARE_VERIFIED)
         self.assertFalse(TRAINING_ELIGIBLE)
 
     def test_d405_nominal_rgb_contract_is_explicit(self):
         self.assertEqual(D405_MODEL, "RealSense D405")
+        self.assertEqual(WRIST_D405_OPTICAL_POS_M, (0.0, -0.180, 0.070))
         self.assertEqual(D405_RGB_RESOLUTION_WH, (1280, 720))
         self.assertEqual(D405_RGB_FPS, 30)
         self.assertEqual(D405_FOV_DEG, (87.0, 58.0))

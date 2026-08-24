@@ -12,7 +12,7 @@ import numpy as np
 
 
 SCHEMA_VERSION = 1
-DIVERSE_TASK_VERSION = "sorting_roll_v12_diverse_sim"
+DIVERSE_TASK_VERSION = "sorting_roll_v13_diverse_sim"
 BASE_ROLL_LENGTH_M = 0.500
 BASE_ROLL_DIAMETER_M = 0.025
 
