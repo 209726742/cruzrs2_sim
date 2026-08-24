@@ -2,7 +2,7 @@
 
 > 状态：2026-08-24 定版。后续 Sorting Roll 仿真采集、数据验收和 π0.5 训练以本文档为准。历史推导与调试过程见 `docs/current/Sorting_Roll数据采集指南_0820.md`。
 
-`sorting_roll_v10_diverse_sim` manifest、录制元数据、validator、LeRobot v2.1 构建器和准入脚本均已实现；175 项回归和一个带渲染边界回合的端到端冒烟已通过。正式 300 回合尚未启动，当前先执行第 3.3 节的 5 组准入。
+`sorting_roll_v10_diverse_sim` 的 5×20 准入已通过：总计 98/100 成功，每组均达到至少 18/20，validator 和三路 D405 相机审计全部通过。正式 campaign `sorting_roll_v10_diverse300_20260824_4gpu` 已按同一版本在 4×4090 上启动，seed 1000–1299 分为四个无重叠 shard；采集完成前不得进入数据构建。
 
 ## 1. 已定版的基线与版本边界
 
@@ -352,7 +352,8 @@ bash pi05_train.sh dry-run \
 
 ## 13. 当前保留的定版证据
 
-- `cruzr_mujoco_sim/output/sorting_roll_expert/v10_diverse_admission_20260824/`（v10 manifest、带渲染边界冒烟、相机审计和 LeRobot v2.1 冒烟；5×20 准入进行中）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/v10_diverse_admission_20260824/`（5×20 准入已通过：98/100 成功，validator 与每组 3 回合相机审计通过）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v10_diverse300_20260824_4gpu/`（正式 300 回合四卡采集进行中；唯一 manifest 与四个 shard 均保存在该目录）
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_20seed_final_20260823/`
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_review_seed0120/`
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_canary30_final_seed0200_0229/`
