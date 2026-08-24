@@ -279,8 +279,11 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             joint_polyline_at_progress(waypoints, -0.01)
-    def test_v9_target_is_sourced_from_scene_contract(self):
-        self.assertEqual(TASK_VERSION, "sorting_roll_v9_d405_sim")
+    def test_v11_target_is_sourced_from_scene_contract(self):
+        self.assertEqual(
+            TASK_VERSION,
+            "sorting_roll_v11_d405_upright_support_sim",
+        )
         np.testing.assert_allclose(TARGET_CENTER, SCENE_TARGET_CENTER)
 
     def test_seed_randomization_is_bounded_and_reproducible(self):
@@ -330,7 +333,7 @@ class SortingRollExpertTest(unittest.TestCase):
                 self.assertLessEqual(float(normalized.max()), upper)
                 self.assertGreaterEqual(float(normalized.max()), lower)
 
-    def test_v9_records_three_d405_candidate_policy_cameras(self):
+    def test_v11_records_three_d405_candidate_policy_cameras(self):
         self.assertEqual(
             POLICY_CAMERAS,
             (
@@ -342,7 +345,7 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertEqual(REVIEW_ONLY_CAMERAS, ("third_person",))
         self.assertEqual(RECORDED_CAMERAS, POLICY_CAMERAS)
 
-    def test_v9_global_camera_mount_matches_sdk_extrinsics(self):
+    def test_v11_global_camera_mount_matches_sdk_extrinsics(self):
         import mujoco
 
         model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))
@@ -727,6 +730,10 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertIn("MODEL_CAMERA_SOURCES", encode_source)
         self.assertIn("CAMERA_ROLES", encode_source)
         self.assertIn("xstack=inputs=3", encode_source)
+        self.assertIn(
+            'f"{width // 2}_0|0_{height}|{width}_{height}:fill=black[v]"',
+            encode_source,
+        )
         self.assertIn("slot_visual_review_video", encode_source)
         self.assertIn("slot_physics_review_video", encode_source)
         self.assertIn("if self.args.review_videos", encode_source)

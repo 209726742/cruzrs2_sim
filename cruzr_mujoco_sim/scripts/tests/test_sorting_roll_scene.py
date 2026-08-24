@@ -95,6 +95,21 @@ class SortingRollSceneTest(unittest.TestCase):
             scene.ROLL_SPAWN[2] - scene.ROLL_SUPPORT_TOP_Z_M,
             scene.ROLL_RADIUS_M + 0.0015,
         )
+        for collision_name in (
+            "roll_support_x_negative_base_col",
+            "roll_support_x_positive_base_col",
+            "roll_support_x_negative_robot_lip_col",
+            "roll_support_x_negative_far_lip_col",
+            "roll_support_x_positive_robot_lip_col",
+            "roll_support_x_positive_far_lip_col",
+        ):
+            visual = geoms[collision_name.removesuffix("_col") + "_visual"]
+            collision = geoms[collision_name]
+            self.assertEqual(visual["pos"], collision["pos"])
+            self.assertEqual(visual["size"], collision["size"])
+            self.assertEqual(visual["group"], "1")
+            self.assertEqual(visual["contype"], "0")
+            self.assertEqual(visual["conaffinity"], "0")
 
     def test_template_contains_named_task_geometry(self):
         root = ET.parse(scene.TEMPLATE_PATH).getroot()

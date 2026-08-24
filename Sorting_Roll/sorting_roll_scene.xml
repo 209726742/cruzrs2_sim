@@ -122,7 +122,26 @@
           size="0.240 0.205 0.035" group="3" contype="1" conaffinity="3"/>
 
     <!-- Two passive U-shaped pickup stands lift the roll above the table while leaving
-         the central flat-gripper workspace unobstructed. The lips prevent side rolling. -->
+         the central flat-gripper workspace unobstructed. The group-1 twins are visible
+         in policy images; the matching group-3 primitives provide contact. -->
+    <geom name="roll_support_x_negative_base_visual" type="box"
+          pos="-0.215 -0.963333333 1.050" size="0.018 0.025 0.050"
+          group="1" contype="0" conaffinity="0" rgba="0.10 0.36 0.88 1"/>
+    <geom name="roll_support_x_positive_base_visual" type="box"
+          pos="0.215 -0.963333333 1.050" size="0.018 0.025 0.050"
+          group="1" contype="0" conaffinity="0" rgba="0.10 0.36 0.88 1"/>
+    <geom name="roll_support_x_negative_robot_lip_visual" type="box"
+          pos="-0.215 -0.943333333 1.110" size="0.018 0.005 0.010"
+          group="1" contype="0" conaffinity="0" rgba="0.10 0.36 0.88 1"/>
+    <geom name="roll_support_x_negative_far_lip_visual" type="box"
+          pos="-0.215 -0.983333333 1.110" size="0.018 0.005 0.010"
+          group="1" contype="0" conaffinity="0" rgba="0.10 0.36 0.88 1"/>
+    <geom name="roll_support_x_positive_robot_lip_visual" type="box"
+          pos="0.215 -0.943333333 1.110" size="0.018 0.005 0.010"
+          group="1" contype="0" conaffinity="0" rgba="0.10 0.36 0.88 1"/>
+    <geom name="roll_support_x_positive_far_lip_visual" type="box"
+          pos="0.215 -0.983333333 1.110" size="0.018 0.005 0.010"
+          group="1" contype="0" conaffinity="0" rgba="0.10 0.36 0.88 1"/>
     <geom name="roll_support_x_negative_base_col" type="box"
           pos="-0.215 -0.963333333 1.050" size="0.018 0.025 0.050"
           group="3" contype="1" conaffinity="3" friction="1.2 0.02 0.001"

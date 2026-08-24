@@ -60,7 +60,7 @@ from sorting_roll_realsense_profile import (
 from sorting_roll_task import REQUIRED_STABLE_SECONDS
 
 
-TASK_VERSION = "sorting_roll_v9_d405_sim"
+TASK_VERSION = "sorting_roll_v11_d405_upright_support_sim"
 POLICY_CAMERAS = tuple(MODEL_CAMERA_SOURCES)
 REVIEW_ONLY_CAMERAS = ("third_person",)
 RECORDED_CAMERAS = POLICY_CAMERAS
@@ -1051,7 +1051,7 @@ class SortingRollExpert:
                 "synthetic_wrist_cameras_recorded": True,
                 "camera_extrinsics_source": (
                     "stereo_left_from_CRUZR_SDK; "
-                    "dual_D405_proxy_extrinsics_pending_real_mount"
+                    "dual_D405_proxy_with_right_optical_roll_correction_pending_real_mount"
                 ),
                 "camera_intrinsics_verified": SDK_CAMERA_INTRINSICS_VERIFIED,
                 "camera_fovy_status": (
@@ -3847,7 +3847,7 @@ class SortingRollExpert:
         filters.append(
             "".join(labeled_streams)
             + "xstack=inputs=3:layout="
-            + f"0_0|{width}_0|{width // 2}_{height}:fill=black[v]"
+            + f"{width // 2}_0|0_{height}|{width}_{height}:fill=black[v]"
         )
         command.extend([
             "-filter_complex",

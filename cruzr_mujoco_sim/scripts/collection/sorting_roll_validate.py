@@ -27,7 +27,7 @@ from sorting_roll_diversity import (  # noqa: E402
 
 
 TASK = "sorting_roll_cruzr"
-TASK_VERSION = "sorting_roll_v9_d405_sim"
+TASK_VERSION = "sorting_roll_v11_d405_upright_support_sim"
 SUPPORTED_TASK_VERSIONS = (TASK_VERSION, DIVERSE_TASK_VERSION)
 FPS = 30
 MAX_CAMERA_STATE_SKEW_S = 0.020
@@ -142,12 +142,12 @@ def diversity_errors(meta, result, episode_meta):
     )
     if task_version == TASK_VERSION:
         if any(value is not None for value in values):
-            errors.append("v9 episode unexpectedly contains v10 diversity metadata")
+            errors.append("base episode unexpectedly contains diversity metadata")
         return errors
     if task_version != DIVERSE_TASK_VERSION:
         return errors
     if not isinstance(values[0], dict) or values[0] != values[1] or values[0] != values[2]:
-        return ["v10 diversity metadata is missing or inconsistent"]
+        return ["diversity metadata is missing or inconsistent"]
 
     diversity = values[0]
     assignment = diversity.get("assignment")
@@ -194,7 +194,7 @@ def diversity_errors(meta, result, episode_meta):
     ):
         errors.append("applied appearance_rgba mismatch")
     if applied.get("visual_texture_disabled") is not True:
-        errors.append("v10 visual texture must be disabled for true color diversity")
+        errors.append("visual texture must be disabled for true color diversity")
 
     spans = np.asarray(applied.get("visual_mesh_span_m", []), dtype=float)
     length_axis = applied.get("visual_length_axis")
@@ -484,7 +484,7 @@ def main(argv=None):
         )
     if DIVERSE_TASK_VERSION in task_versions and len(campaigns) != 1:
         collection_errors.append(
-            f"v10 campaigns cannot be mixed: {campaigns}"
+            f"diversity campaigns cannot be mixed: {campaigns}"
         )
     if collection_errors:
         records.append({

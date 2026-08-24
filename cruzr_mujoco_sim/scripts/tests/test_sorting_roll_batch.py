@@ -57,10 +57,10 @@ class SortingRollBatchTest(unittest.TestCase):
         self.assertIn("sim_seconds exceeds 60 seconds", errors)
         self.assertIn("one-minute gate did not pass", errors)
 
-    def test_v10_result_requires_diversity_evidence(self):
+    def test_v11_result_requires_diversity_evidence(self):
         result = valid_result()
         result["task_version"] = DIVERSE_TASK_VERSION
-        self.assertIn("v10 diversity evidence is missing", result_errors(result))
+        self.assertIn("diversity evidence is missing", result_errors(result))
         result["diversity"] = {"assignment": {}, "applied": {}}
         self.assertEqual(result_errors(result), [])
 

@@ -24,6 +24,7 @@ from sorting_roll_realsense_profile import (
     MODEL_CAMERA_SOURCES,
     POLICY_IMAGE_MAP,
     TRAINING_ELIGIBLE,
+    RIGHT_WRIST_UPRIGHT_QUAT_WXYZ,
     apply_model_camera_overrides,
     profile_report,
 )
@@ -37,6 +38,14 @@ class SortingRollRealSenseProfileTest(unittest.TestCase):
         )
         self.assertEqual(len(MODEL_CAMERA_SOURCES), 3)
         self.assertEqual(len(set(MODEL_CAMERA_SOURCES.values())), 3)
+        self.assertEqual(
+            MODEL_CAMERA_SOURCES["left_wrist_realsense"],
+            "hand_left_shelf",
+        )
+        self.assertEqual(
+            MODEL_CAMERA_SOURCES["right_wrist_realsense"],
+            "hand_right",
+        )
 
     def test_policy_slots_keep_real_wrist_semantics(self):
         self.assertEqual(
@@ -50,6 +59,7 @@ class SortingRollRealSenseProfileTest(unittest.TestCase):
 
     def test_unverified_simulation_candidate_is_not_training_eligible(self):
         report = profile_report()
+        self.assertEqual(report["profile"], "sorting_roll_d405_candidate_v2")
         self.assertTrue(report["passed"])
         self.assertFalse(HARDWARE_VERIFIED)
         self.assertFalse(TRAINING_ELIGIBLE)
@@ -67,14 +77,16 @@ class SortingRollRealSenseProfileTest(unittest.TestCase):
                 MODEL_CAMERA_OVERRIDES[wrist]["fovy_deg"],
                 D405_FOV_DEG[1],
             )
+        self.assertNotIn(
+            "quat_wxyz",
+            MODEL_CAMERA_OVERRIDES["left_wrist_realsense"],
+        )
         self.assertEqual(
-            len(MODEL_CAMERA_OVERRIDES[
-                "right_wrist_realsense"
-            ]["quat_wxyz"]),
-            4,
+            MODEL_CAMERA_OVERRIDES["right_wrist_realsense"]["quat_wxyz"],
+            RIGHT_WRIST_UPRIGHT_QUAT_WXYZ,
         )
 
-    def test_fovy_only_override_preserves_left_proxy_orientation(self):
+    def test_right_override_preserves_left_and_corrects_image_roll(self):
         class CameraObject:
             mjOBJ_CAMERA = 0
 
@@ -102,6 +114,10 @@ class SortingRollRealSenseProfileTest(unittest.TestCase):
         left_quat = model.cam_quat[0].copy()
         apply_model_camera_overrides(MujocoStub(), model)
         np.testing.assert_array_equal(model.cam_quat[0], left_quat)
+        np.testing.assert_allclose(
+            model.cam_quat[1],
+            RIGHT_WRIST_UPRIGHT_QUAT_WXYZ,
+        )
         self.assertEqual(model.cam_fovy[0], 58.0)
         self.assertEqual(model.cam_fovy[1], 58.0)
 

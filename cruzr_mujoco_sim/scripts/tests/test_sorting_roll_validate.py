@@ -65,7 +65,7 @@ class SortingRollValidateTest(unittest.TestCase):
             timestamp_errors(payload, count),
         )
 
-    def test_v10_diversity_evidence_matches_assignment_and_detects_tampering(self):
+    def test_v11_diversity_evidence_matches_assignment_and_detects_tampering(self):
         assignment = generate_manifest(
             "validator_contract", 14000, 1, "geometry_medium"
         )["assignments"][0]
@@ -109,7 +109,7 @@ class SortingRollValidateTest(unittest.TestCase):
         tampered = copy.deepcopy(result)
         tampered["diversity"]["applied"]["roll_length_m"] += 0.01
         errors = diversity_errors(meta, tampered, episode_meta)
-        self.assertIn("v10 diversity metadata is missing or inconsistent", errors)
+        self.assertIn("diversity metadata is missing or inconsistent", errors)
 
     def test_episode_diversity_counts_report_all_strata(self):
         manifest = generate_manifest("counts_contract", 14100, 20)

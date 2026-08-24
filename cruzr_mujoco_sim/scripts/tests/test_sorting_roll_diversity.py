@@ -29,6 +29,7 @@ class SortingRollDiversityTest(unittest.TestCase):
         self.assertEqual(OBJECT_PROFILES["long_baseline"]["diameter_m"], 0.024)
 
     def test_formal_300_manifest_has_exact_stratified_quotas(self):
+        self.assertEqual(DIVERSE_TASK_VERSION, "sorting_roll_v11_diverse_sim")
         manifest = generate_manifest("formal300_contract", 1000, 300)
         self.assertEqual(manifest["task_version"], DIVERSE_TASK_VERSION)
         self.assertEqual(manifest["counts"], {

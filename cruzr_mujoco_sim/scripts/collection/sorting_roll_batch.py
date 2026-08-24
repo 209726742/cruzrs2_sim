@@ -51,7 +51,7 @@ def result_errors(result):
         result.get("task_version") == DIVERSE_TASK_VERSION
         and not isinstance(result.get("diversity"), dict)
     ):
-        errors.append("v10 diversity evidence is missing")
+        errors.append("diversity evidence is missing")
     return errors
 
 

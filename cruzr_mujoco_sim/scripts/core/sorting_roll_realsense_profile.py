@@ -2,7 +2,7 @@
 """Unverified dual-wrist RealSense candidate for Sorting Roll."""
 
 
-PROFILE_NAME = "sorting_roll_d405_candidate_v1"
+PROFILE_NAME = "sorting_roll_d405_candidate_v2"
 D405_MODEL = "RealSense D405"
 D405_RGB_RESOLUTION_WH = (1280, 720)
 D405_RGB_FPS = 30
@@ -19,12 +19,20 @@ MODEL_CAMERA_SOURCES = {
     "left_wrist_realsense": "hand_left_shelf",
     "right_wrist_realsense": "hand_right",
 }
+# Preserve the previously audited right-wrist viewing axis, but rotate the
+# camera 180 degrees about its own optical axis so image-up matches the left wrist.
+RIGHT_WRIST_UPRIGHT_QUAT_WXYZ = (
+    0.2801147,
+    0.9134162,
+    -0.1318878,
+    -0.2642198,
+)
 MODEL_CAMERA_OVERRIDES = {
     "left_wrist_realsense": {
         "fovy_deg": D405_FOV_DEG[1],
     },
     "right_wrist_realsense": {
-        "quat_wxyz": (-0.2642198, 0.1318878, 0.9134162, -0.2801147),
+        "quat_wxyz": RIGHT_WRIST_UPRIGHT_QUAT_WXYZ,
         "fovy_deg": D405_FOV_DEG[1],
     },
 }
@@ -96,7 +104,7 @@ def profile_report():
         "hardware_verified": HARDWARE_VERIFIED,
         "training_eligible": TRAINING_ELIGIBLE,
         "simulation_mount_status": (
-            "d405_intrinsics_with_asymmetric_proxy_extrinsics_pending_real_mount"
+            "d405_intrinsics_with_right_optical_roll_correction_pending_real_mount"
         ),
         "checks": checks,
         "passed": all(checks.values()),
