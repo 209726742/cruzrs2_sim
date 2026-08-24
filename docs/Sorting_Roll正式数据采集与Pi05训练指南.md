@@ -1,8 +1,8 @@
 # Sorting Roll 正式数据采集与 π0.5 训练指南
 
-> 状态：2026-08-24 定版。后续 Sorting Roll 仿真采集、数据验收和 π0.5 训练以本文档为准。历史推导与调试过程见 `docs/current/Sorting_Roll数据采集指南_0820.md`。
+> 状态：2026-08-25 定版并完成正式训练前门禁。后续 Sorting Roll 仿真采集、数据验收和 π0.5 训练以本文档为准。历史推导与调试过程见 `docs/current/Sorting_Roll数据采集指南_0820.md`。
 
-`sorting_roll_v10_diverse_sim` 的 5×20 准入已通过：总计 98/100 成功，每组均达到至少 18/20，validator 和三路 D405 相机审计全部通过。正式 campaign `sorting_roll_v10_diverse300_20260824_4gpu` 已按同一版本在 4×4090 上启动，seed 1000–1299 分为四个无重叠 shard；采集完成前不得进入数据构建。
+`sorting_roll_v10_diverse_sim` 的 5×20 准入已通过：总计 98/100 成功，每组均达到至少 18/20，validator 和三路策略相机审计全部通过。正式 campaign `sorting_roll_v10_diverse300_20260824_4gpu` 已完成 300 次初采，得到 295 个成功回合；失败 seed `1012/1151/1174/1201/1290` 已按原 split 和缺失多样性配额定向补采。最终选出的 300 个唯一成功回合全部通过 validator，LeRobot v3.0 全量元数据与抽样视频解码审计通过，π0.5 20 步训练及 20→40 步断点续训通过。正式长训练尚未启动。
 
 ## 1. 已定版的基线与版本边界
 
@@ -114,7 +114,7 @@ tmux new-session -d -s sorting_roll_v10_admission \
 - 8×4090 只在以下情况使用：目标扩大到 1,000 回合以上、4 卡预估无法满足截止时间，或已经确认 CPU、文件系统和 JPEG 写入不是瓶颈。
 - 单张 4090 同时只运行一个渲染 shard。增加同卡并发通常会放大显存、EGL 和 I/O 风险。
 - 多卡只缩短采集墙钟时间，不改变 seed、数据分布、成功标准或格式。
-- 当前机器只检测到 GPU 0；以下多卡命令应在真正具备 4/8 张卡的机器上执行。
+- 本次机器已检测并验证 GPU 0–3 的 4×4090 采集与短训练链路；若迁移到 8 卡机器，必须重新执行环境检查和 DDP canary。
 
 ## 5. 采集前检查
 
@@ -322,6 +322,8 @@ bash pi05_train.sh dry-run \
 - checkpoint 完整可读取，并能从该 checkpoint 恢复到至少第 40 步。
 - 训练只使用 train split，val/test 不得进入优化器。
 
+2026-08-25 实测结果：训练只读取 train split 的 240 个回合；fresh 20-step 与 20→40-step resume 均以退出码 0 完成，40 个 loss/gradient 测量值全部有限，step 20 和 step 40 checkpoint 均通过完整性审计。该结果只证明数据加载、DDP、反向传播、保存与恢复链路可用，不代表策略已经学会任务。
+
 只有 4 卡 canary 稳定后才考虑 8 卡。8 卡需要重新做 DDP canary；不得假定卡数翻倍就一定更省钱或更快。
 
 ## 11. 扩大数据和正式训练的进入条件
@@ -353,7 +355,12 @@ bash pi05_train.sh dry-run \
 ## 13. 当前保留的定版证据
 
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v10_diverse_admission_20260824/`（5×20 准入已通过：98/100 成功，validator 与每组 3 回合相机审计通过）
-- `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v10_diverse300_20260824_4gpu/`（正式 300 回合四卡采集进行中；唯一 manifest 与四个 shard 均保存在该目录）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v10_diverse300_20260824_4gpu/`（正式 300 回合四卡采集完成：初采 295/300，通过 5 个定向补采恢复为 300/300；train/val/test 为 240/30/30）
+- `cruzr_mujoco_sim/out/datasets/sorting_roll_v10_diverse300_lerobot_v21_20260824/`（v2.1 staging：300 episodes、519866 frames、900 个源视频流）
+- `cruzr_mujoco_sim/out/datasets/sorting_roll_v10_diverse300_lerobot_v30_20260824/`（LeRobot v3.0：三路 224×224 RGB，state/action 各 18 维）
+- `cruzr_mujoco_sim/out/training/pi05_sorting_roll_v10_canary_20260824/`（π0.5 20-step fresh 与 20→40-step resume checkpoint）
+- `log/sorting_roll_v10_diverse300_lerobot_v30_20260824_audit.json`（v3.0 数据与视频抽样审计，`passed=true`）
+- `log/pi05_sorting_roll_v10_canary_20260824_audit.json`（短训练、checkpoint 和恢复审计，`passed=true`）
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_20seed_final_20260823/`
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_review_seed0120/`
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v9_d405_canary30_final_seed0200_0229/`
