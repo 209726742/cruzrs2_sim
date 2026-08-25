@@ -37,6 +37,10 @@ from sorting_roll_expert import (
     FLAT_PICK_ROLL_CLEARANCE_MARGIN_M,
     FLAT_PICK_COLLISION_STEP_RAD,
     FLAT_PICK_PREGRASP_CLEARANCE_Y_M,
+    FLAT_PICK_SIDE_MARGIN_M,
+    FLAT_PICK_PAD_TABLE_CLEARANCE_M,
+    FLAT_PICK_PAD_PATH_MAX_M,
+    FLAT_PICK_PAD_BACKTRACK_MAX_M,
     FLAT_PICK_TARGET_ALONG_M,
     FLAT_PICK_TIP_BIAS_Y_M,
     GRASP_YAW_DEG,
@@ -68,6 +72,7 @@ from sorting_roll_expert import (
     TARGET_AXIS,
     SLOT_PHYSICS_REVIEW_CAMERA,
     SLOT_VISUAL_REVIEW_CAMERA,
+    SORTING_ROLL_INITIAL_ARM_PARK,
     anchor_feedback_mount_position,
     anchored_mount_position,
     angle,
@@ -79,6 +84,7 @@ from sorting_roll_expert import (
     coordination_clearance_mask,
     monotonic_coordination_indices,
     flat_regrasp_anchors,
+    flat_pick_workspace_is_safe,
     integrated_depth_margin,
     guarded_release_geometry_is_ready,
     guarded_release_is_ready,
@@ -184,6 +190,23 @@ class SortingRollExpertTest(unittest.TestCase):
             ])
         )
 
+    def test_integrated_entry_applies_clearance_guarded_axis_feedback(self):
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        method = source[
+            source.index("    def slowly_enter_integrated_top_tier("):
+            source.index("    def level_release_support_surfaces(")
+        ]
+        self.assertIn("if not insertion_axis_is_safe(axis):", method)
+        self.assertIn(
+            "insertion_axis_correction_has_clearance(",
+            method,
+        )
+        self.assertIn("INSERT_AXIS_CORRECTION_MAX_STEP_M", method)
+        self.assertIn("self.move_mount_command_deltas(", method)
+        self.assertIn("shelf_safe=True", method)
+
     def test_release_geometry_enters_before_lowering_and_lifts_to_exit(self):
         self.assertAlmostEqual(ARM_RETRACT_M, 0.082)
         self.assertAlmostEqual(SHELF_STAGE_OFFSET_X, -0.050)
@@ -282,7 +305,7 @@ class SortingRollExpertTest(unittest.TestCase):
     def test_v13_target_is_sourced_from_scene_contract(self):
         self.assertEqual(
             TASK_VERSION,
-            "sorting_roll_v13_d405_rearward_mount_sim",
+            "sorting_roll_v15_d405_isomorphic_forward_park_sim",
         )
         np.testing.assert_allclose(TARGET_CENTER, SCENE_TARGET_CENTER)
 
@@ -372,8 +395,16 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         self.assertAlmostEqual(FLAT_PICK_COLLISION_STEP_RAD, 0.005)
         self.assertEqual(FLAT_PICK_COORDINATION_GRID_STEPS, 120)
-        self.assertEqual(len(FLAT_PICK_JOINT_WAYPOINTS["l"]), 3)
-        self.assertEqual(len(FLAT_PICK_JOINT_WAYPOINTS["r"]), 5)
+        self.assertEqual(FLAT_PICK_JOINT_WAYPOINTS, {"l": (), "r": ()})
+        for hand in ("l", "r"):
+            np.testing.assert_allclose(
+                SORTING_ROLL_INITIAL_ARM_PARK[hand],
+                FLAT_PICK_GOAL_IK_SEEDS[hand],
+            )
+        self.assertAlmostEqual(FLAT_PICK_SIDE_MARGIN_M, 0.050)
+        self.assertAlmostEqual(FLAT_PICK_PAD_TABLE_CLEARANCE_M, 0.012)
+        self.assertAlmostEqual(FLAT_PICK_PAD_PATH_MAX_M, 1.150)
+        self.assertAlmostEqual(FLAT_PICK_PAD_BACKTRACK_MAX_M, 0.040)
         self.assertGreater(FLAT_PICK_GOAL_IK_SEEDS["l"][4], 0.0)
         self.assertGreater(FLAT_PICK_GOAL_IK_SEEDS["r"][4], 0.0)
         self.assertEqual(FLAT_PICK_COORDINATION_CLEARANCE_CELLS, 1)
@@ -397,6 +428,26 @@ class SortingRollExpertTest(unittest.TestCase):
         )
         self.assertGreater(BASE_MAX_SPEED, 0.20)
         self.assertGreater(BASE_MAX_YAW_RATE, 0.40)
+
+    def test_flat_pick_workspace_keeps_hands_on_their_own_sides(self):
+        self.assertTrue(flat_pick_workspace_is_safe(
+            [0.25, 0.08, 0.90],
+            [0.25, -0.08, 0.90],
+        ))
+        self.assertFalse(flat_pick_workspace_is_safe(
+            [0.25, -0.01, 0.90],
+            [0.25, -0.08, 0.90],
+        ))
+        self.assertFalse(flat_pick_workspace_is_safe(
+            [0.25, 0.08, 0.90],
+            [0.25, 0.01, 0.90],
+        ))
+        self.assertFalse(flat_pick_workspace_is_safe(
+            [0.50, 0.08, 0.90],
+            [0.25, -0.08, 0.90],
+        ))
+        with self.assertRaises(ValueError):
+            flat_pick_workspace_is_safe([0.0, 0.1], [0.0, -0.1, 0.8])
 
     def test_dynamic_coordination_expands_obstacles_and_checks_edges(self):
         validity = np.ones((5, 5), dtype=bool)
@@ -620,6 +671,24 @@ class SortingRollExpertTest(unittest.TestCase):
             atol=1e-12,
         )
 
+    def test_diversity_is_applied_before_task_ready_arm_park(self):
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        constructor = source[
+            source.index("    def __init__(self, args, ct, mujoco"):
+            source.index("    def phase(self, name):")
+        ]
+        self.assertLess(
+            constructor.index("apply_model_diversity("),
+            constructor.index("apply_sorting_roll_initial_park("),
+        )
+        main = source[source.index("def main(argv=None):"):]
+        self.assertNotIn(
+            "args.initial_arm_park_report = apply_sorting_roll_initial_park",
+            main,
+        )
+
     def test_review_choreography_phase_order(self):
         source = (
             COLLECTION_DIR / "sorting_roll_expert.py"
@@ -630,8 +699,9 @@ class SortingRollExpertTest(unittest.TestCase):
         ]
         phases = (
             "navigate_to_table_observation",
-            "approach_table_with_arms_down",
             "localize_roll_with_head_stereo",
+            "confirm_task_ready_arm_park_after_stereo_localization",
+            "approach_table_with_arms_staged",
             "coordinated_flat_pick_pregrasp_after_stereo_localization",
             "horizontal_approach_and_grasp",
             "lift_flat_from_pickup_support",
@@ -656,7 +726,7 @@ class SortingRollExpertTest(unittest.TestCase):
         ]
         self.assertEqual(offsets, sorted(offsets))
         self.assertIn(
-            '"arms_unchanged_through_table_approach"',
+            '"staged_arms_unchanged_through_table_approach"',
             execute_source,
         )
         self.assertNotIn('self.phase("observe_roll")', execute_source)
@@ -670,8 +740,12 @@ class SortingRollExpertTest(unittest.TestCase):
             "            pregrasp_positions,",
             execute_source,
         )
-        self.assertNotIn(
-            "self.follow_empty_hands_stage(",
+        self.assertIn(
+            "self.verify_task_ready_arm_park()",
+            execute_source,
+        )
+        self.assertIn(
+            '"collision_free_initial_observation_and_table_approach"',
             execute_source,
         )
         self.assertIn("tolerance=0.003", execute_source)
@@ -694,6 +768,18 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertIn(
             '"collision_free_coordinated_flat_pick_path"',
             source,
+        )
+        self.assertIn(
+            '"coordinated_flat_pick_workspace_execution"',
+            source,
+        )
+        self.assertIn(
+            '"coordinated_flat_pick_table_clearance_execution"',
+            source,
+        )
+        self.assertIn(
+            '"wrist_d405_initialization"',
+            execute_source,
         )
         self.assertIn(
             "FLAT_PICK_ROLL_CLEARANCE_MARGIN_M",

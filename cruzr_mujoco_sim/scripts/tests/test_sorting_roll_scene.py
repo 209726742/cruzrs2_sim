@@ -145,19 +145,54 @@ class SortingRollSceneTest(unittest.TestCase):
             set(cameras),
             {"sorting_roll_left_wrist_d405", "sorting_roll_right_wrist_d405"},
         )
-        for camera, parent in (
-            ("sorting_roll_left_wrist_d405", "L_pgc140_mount"),
-            ("sorting_roll_right_wrist_d405", "R_pgc140_mount"),
+        for camera, parent, side in (
+            (
+                "sorting_roll_left_wrist_d405",
+                "L_pgc140_mount",
+                "L",
+            ),
+            (
+                "sorting_roll_right_wrist_d405",
+                "R_pgc140_mount",
+                "R",
+            ),
         ):
             self.assertEqual(parents[cameras[camera]].attrib["name"], parent)
             np.testing.assert_allclose(
                 np.fromstring(cameras[camera].attrib["pos"], sep=" "),
-                scene.WRIST_D405_OPTICAL_POS_M,
+                scene.WRIST_D405_OPTICAL_POS_M[side],
             )
             np.testing.assert_allclose(
                 np.fromstring(cameras[camera].attrib["quat"], sep=" "),
-                scene.WRIST_D405_OPTICAL_QUAT_WXYZ,
+                scene.WRIST_D405_OPTICAL_QUAT_WXYZ[side],
+                atol=1e-6,
             )
+        geoms = {
+            element.attrib["name"]: element
+            for element in root.iter("geom")
+            if "sorting_roll_d405" in element.attrib.get("name", "")
+        }
+        for suffix in (
+            "body_visual",
+            "face_visual",
+            "rail_visual",
+            "adapter_visual",
+            "body_collision",
+            "rail_collision",
+            "adapter_collision",
+        ):
+            left_y = np.fromstring(
+                geoms[f"L_sorting_roll_d405_{suffix}"].attrib["pos"],
+                sep=" ",
+            )[1]
+            right_y = np.fromstring(
+                geoms[f"R_sorting_roll_d405_{suffix}"].attrib["pos"],
+                sep=" ",
+            )[1]
+            # Both side-specific gripper frames use the same local D405
+            # installation transform. Their mirrored parent frames produce the
+            # mirrored world-space mounts checked by the initialization gate.
+            self.assertAlmostEqual(left_y, right_y)
         include = ET.parse(scene.TEMPLATE_PATH).getroot().find("include")
         self.assertEqual(include.attrib["file"], scene.TASK_ROBOT_PATH.name)
 

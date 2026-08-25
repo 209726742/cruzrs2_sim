@@ -10,6 +10,13 @@ import time
 
 import numpy as np
 
+from sorting_roll_realsense_profile import (
+    LEFT_WRIST_D405_OPTICAL_POS_M,
+    LEFT_WRIST_D405_OPTICAL_QUAT_WXYZ,
+    RIGHT_WRIST_D405_OPTICAL_POS_M,
+    RIGHT_WRIST_D405_OPTICAL_QUAT_WXYZ,
+)
+
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_ROOT = PACKAGE_ROOT.parent
@@ -18,39 +25,45 @@ TEMPLATE_PATH = SORTING_ROOT / "sorting_roll_scene.xml"
 SCENE_PATH = PACKAGE_ROOT / "assets" / "sorting_roll_scene.xml"
 BASE_ROBOT_PATH = PACKAGE_ROOT / "assets" / "cruzr_pgc140.xml"
 TASK_ROBOT_PATH = PACKAGE_ROOT / "assets" / "sorting_roll_cruzr_pgc140.xml"
-WRIST_D405_OPTICAL_POS_M = np.array([0.0, -0.180, 0.070])
-WRIST_D405_OPTICAL_QUAT_WXYZ = np.array([0.5, 0.8660254, 0.0, 0.0])
+WRIST_D405_OPTICAL_POS_M = {
+    "L": np.array(LEFT_WRIST_D405_OPTICAL_POS_M),
+    "R": np.array(RIGHT_WRIST_D405_OPTICAL_POS_M),
+}
+WRIST_D405_OPTICAL_QUAT_WXYZ = {
+    "L": np.array(LEFT_WRIST_D405_OPTICAL_QUAT_WXYZ),
+    "R": np.array(RIGHT_WRIST_D405_OPTICAL_QUAT_WXYZ),
+}
 D405_MOUNT_TEMPLATE = """
                             <!-- Sorting Roll-only D405 candidate constrained by the supplied installation diagram. -->
-                            <camera name="{camera}" pos="0 -0.180 0.070"
-                                    quat="0.5 0.8660254 0 0" fovy="58"/>
+                            <camera name="{camera}" pos="{camera_pos}"
+                                    quat="{optical_quat}" fovy="58"/>
                             <geom name="{side}_sorting_roll_d405_body_visual" type="box"
-                                  pos="0 -0.19342 0.06225" quat="0.5 0.8660254 0 0"
+                                  pos="0 {body_y} 0.06225" quat="{optical_quat}"
                                   size="0.021 0.021 0.0115" contype="0" conaffinity="0"
                                   group="5" density="0" rgba="0.32 0.36 0.40 0"/>
                             <geom name="{side}_sorting_roll_d405_face_visual" type="box"
-                                  pos="0 -0.18416 0.06760" quat="0.5 0.8660254 0 0"
+                                  pos="0 {face_y} 0.06760" quat="{optical_quat}"
                                   size="0.020 0.020 0.0008" contype="0" conaffinity="0"
                                   group="5" density="0" rgba="0.03 0.04 0.05 0"/>
                             <geom name="{side}_sorting_roll_d405_rail_visual" type="box"
-                                  pos="0 -0.061 -0.0025" size="0.018 0.002 0.0175"
+                                  pos="0 {rail_y} -0.0025" size="0.018 0.002 0.0175"
                                   contype="0" conaffinity="0" group="5" density="0"
                                   rgba="0.22 0.24 0.27 0"/>
                             <geom name="{side}_sorting_roll_d405_adapter_visual" type="box"
-                                  pos="0 -0.126 0.038" quat="0.8150 0.5795 0 0"
+                                  pos="0 {adapter_y} 0.038" quat="{adapter_quat}"
                                   size="0.018 0.002 0.070"
                                   contype="0" conaffinity="0" group="5" density="0"
                                   rgba="0.22 0.24 0.27 0"/>
                             <geom name="{side}_sorting_roll_d405_body_collision" type="box"
-                                  pos="0 -0.19342 0.06225" quat="0.5 0.8660254 0 0"
+                                  pos="0 {body_y} 0.06225" quat="{optical_quat}"
                                   size="0.021 0.021 0.0115" contype="0" conaffinity="0"
                                   group="5" density="0" rgba="0 0 0 0"/>
                             <geom name="{side}_sorting_roll_d405_rail_collision" type="box"
-                                  pos="0 -0.061 -0.0025" size="0.018 0.002 0.0175"
+                                  pos="0 {rail_y} -0.0025" size="0.018 0.002 0.0175"
                                   contype="0" conaffinity="0" group="5" density="0"
                                   rgba="0 0 0 0"/>
                             <geom name="{side}_sorting_roll_d405_adapter_collision" type="box"
-                                  pos="0 -0.126 0.038" quat="0.8150 0.5795 0 0"
+                                  pos="0 {adapter_y} 0.038" quat="{adapter_quat}"
                                   size="0.018 0.002 0.070"
                                   contype="0" conaffinity="0" group="5" density="0"
                                   rgba="0 0 0 0"/>"""
@@ -182,9 +195,26 @@ def task_robot_xml(base_robot_xml):
     for side, camera, marker in D405_MOUNT_SPECS:
         if result.count(marker) != 1:
             raise ValueError(f"robot asset does not contain one {camera} marker")
+        position = WRIST_D405_OPTICAL_POS_M[side]
+        quaternion = WRIST_D405_OPTICAL_QUAT_WXYZ[side]
+        side_sign = float(np.sign(position[1]))
         result = result.replace(
             marker,
-            marker + D405_MOUNT_TEMPLATE.format(side=side, camera=camera),
+            marker + D405_MOUNT_TEMPLATE.format(
+                side=side,
+                camera=camera,
+                camera_pos=" ".join(f"{value:g}" for value in position),
+                optical_quat=" ".join(
+                    f"{value:g}" for value in quaternion
+                ),
+                body_y=f"{side_sign * 0.19342:g}",
+                face_y=f"{side_sign * 0.18416:g}",
+                rail_y=f"{side_sign * 0.061:g}",
+                adapter_y=f"{side_sign * 0.126:g}",
+                adapter_quat=(
+                    f"0.815 {(-side_sign) * 0.5795:g} 0 0"
+                ),
+            ),
         )
     return result
 

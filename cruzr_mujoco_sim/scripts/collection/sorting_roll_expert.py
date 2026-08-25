@@ -56,11 +56,12 @@ from sorting_roll_realsense_profile import (
     PROFILE_NAME,
     apply_model_camera_overrides,
     profile_report,
+    wrist_camera_initialization_report,
 )
 from sorting_roll_task import REQUIRED_STABLE_SECONDS
 
 
-TASK_VERSION = "sorting_roll_v13_d405_rearward_mount_sim"
+TASK_VERSION = "sorting_roll_v15_d405_isomorphic_forward_park_sim"
 POLICY_CAMERAS = tuple(MODEL_CAMERA_SOURCES)
 REVIEW_ONLY_CAMERAS = ("third_person",)
 RECORDED_CAMERAS = POLICY_CAMERAS
@@ -82,38 +83,45 @@ TABLE_CLEAR_REVERSE_M = 0.22
 FLAT_PICK_TARGET_ALONG_M = 0.160
 FLAT_PICK_TIP_BIAS_Y_M = 0.034
 FLAT_PICK_PREGRASP_CLEARANCE_Y_M = 0.080
-FLAT_PICK_JOINT_WAYPOINTS = {
+SORTING_ROLL_INITIAL_ARM_PARK = {
     "l": (
-        (-0.136501, -0.653467, -0.672957, -1.567190,
-         0.303419, 0.148975, -0.789504),
-        (0.007417, -0.403672, -0.459403, -2.158146,
-         0.458376, -0.021129, -0.537498),
-        (0.158711, -0.480863, -0.595613, -2.291150,
-         0.458796, 0.074554, -0.626465),
+        0.49416359, -0.75437207, -0.34254118, -2.21999880,
+        0.81456269, 0.35954162, -1.28679103,
     ),
     "r": (
-        (-0.001863, -0.111983, 0.178962, -0.442671,
-         0.231289, 0.012784, 0.157823),
-        (-0.060050, -0.098085, 0.432070, -0.928434,
-         0.630283, -0.072288, 0.250209),
-        (0.182409, -0.125035, 0.953736, -1.910469,
-         1.718765, -0.309880, 0.337646),
-        (0.373690, -0.128822, 0.501785, -2.047680,
-         1.618803, -0.251106, -0.055149),
-        (0.134713, -0.056393, 0.773077, -2.073111,
-         1.590651, -0.126717, -0.037330),
+        0.01646851, -0.47162549, 0.97093201, -2.30892391,
+        2.20681147, -0.04700812, 0.88190000,
     ),
 }
+EARLY_COLLISION_MONITOR_PHASES = frozenset({
+    "initial_hold",
+    "navigate_to_table_observation",
+    "localize_roll_with_head_stereo",
+    "confirm_task_ready_arm_park_after_stereo_localization",
+    "approach_table_with_arms_staged",
+    "coordinated_flat_pick_pregrasp_after_stereo_localization",
+    "horizontal_approach_and_grasp",
+    "lift_flat_from_pickup_support",
+})
+FLAT_PICK_JOINT_WAYPOINTS = {"l": (), "r": ()}
+
 FLAT_PICK_GOAL_IK_SEEDS = {
-    "l": (0.135362, -0.554569, -0.799688, -2.264482,
-          0.884436, 0.052098, -1.010196),
-    "r": (0.207290, -0.095453, 1.256014, -2.366433,
-          1.988432, -0.326054, 0.521489),
+    "l": (0.49416359, -0.75437207, -0.34254118, -2.21999880,
+          0.81456269, 0.35954162, -1.28679103),
+    "r": (0.01646851, -0.47162549, 0.97093201, -2.30892391,
+          2.20681147, -0.04700812, 0.88190000),
 }
 FLAT_PICK_COORDINATION_GRID_STEPS = 120
 FLAT_PICK_COORDINATION_CLEARANCE_CELLS = 1
 FLAT_PICK_ROLL_CLEARANCE_MARGIN_M = 0.008
 FLAT_PICK_COLLISION_STEP_RAD = 0.005
+FLAT_PICK_SIDE_MARGIN_M = 0.050
+FLAT_PICK_PAD_X_RANGE_M = (-0.030, 0.480)
+FLAT_PICK_PAD_ABS_Y_MAX_M = 0.320
+FLAT_PICK_PAD_Z_RANGE_M = (0.470, 1.250)
+FLAT_PICK_PAD_TABLE_CLEARANCE_M = 0.012
+FLAT_PICK_PAD_PATH_MAX_M = 1.150
+FLAT_PICK_PAD_BACKTRACK_MAX_M = 0.040
 FLAT_PICK_LIFT_M = 0.085
 PRE_RELEASE_Y_TOLERANCE_M = 0.003
 PRE_RELEASE_ENDPOINT_MARGIN_M = 0.020
@@ -235,6 +243,33 @@ def joint_polyline_at_progress(waypoints, progress):
     return (
         waypoints[segment]
         + blend * (waypoints[segment + 1] - waypoints[segment])
+    )
+
+
+def flat_pick_workspace_is_safe(left_pad_base, right_pad_base):
+    left_pad_base = np.asarray(left_pad_base, dtype=float)
+    right_pad_base = np.asarray(right_pad_base, dtype=float)
+    if left_pad_base.shape != (3,) or right_pad_base.shape != (3,):
+        raise ValueError("flat-pick pad positions must be 3-D")
+    return bool(
+        FLAT_PICK_PAD_X_RANGE_M[0]
+        <= left_pad_base[0]
+        <= FLAT_PICK_PAD_X_RANGE_M[1]
+        and FLAT_PICK_PAD_X_RANGE_M[0]
+        <= right_pad_base[0]
+        <= FLAT_PICK_PAD_X_RANGE_M[1]
+        and FLAT_PICK_SIDE_MARGIN_M
+        <= left_pad_base[1]
+        <= FLAT_PICK_PAD_ABS_Y_MAX_M
+        and -FLAT_PICK_PAD_ABS_Y_MAX_M
+        <= right_pad_base[1]
+        <= -FLAT_PICK_SIDE_MARGIN_M
+        and FLAT_PICK_PAD_Z_RANGE_M[0]
+        <= left_pad_base[2]
+        <= FLAT_PICK_PAD_Z_RANGE_M[1]
+        and FLAT_PICK_PAD_Z_RANGE_M[0]
+        <= right_pad_base[2]
+        <= FLAT_PICK_PAD_Z_RANGE_M[1]
     )
 
 
@@ -828,6 +863,56 @@ def load_teleop(scene_path, gpu, seed, prompt=None):
     return module
 
 
+def apply_sorting_roll_initial_park(ct, mujoco):
+    for hand, values in SORTING_ROLL_INITIAL_ARM_PARK.items():
+        arm = ct.ARMS[hand]
+        target = np.asarray(values, dtype=float)
+        if target.shape != (7,):
+            raise RuntimeError(f"invalid {hand} initial arm park shape")
+        if np.any(target < arm.lo) or np.any(target > arm.hi):
+            raise RuntimeError(f"{hand} initial arm park exceeds joint limits")
+        for address, value in zip(arm.qadr, target):
+            ct.d.qpos[address] = value
+        for actuator, value in zip(arm.arm_acts, target):
+            ct.d.ctrl[actuator] = value
+        ct.qtgt[hand] = target.copy()
+        ct.grip_cmd[hand] = ct.GRIP_OPEN
+        ct.set_gripper_state(arm, ct.GRIP_OPEN)
+    ct.d.qvel[:] = 0.0
+    mujoco.mj_forward(ct.m, ct.d)
+    for _ in range(240):
+        mujoco.mj_step(ct.m, ct.d)
+    measured = {}
+    maximum_error = 0.0
+    for hand, values in SORTING_ROLL_INITIAL_ARM_PARK.items():
+        arm = ct.ARMS[hand]
+        target = np.asarray(values, dtype=float)
+        measured[hand] = np.asarray([
+            ct.d.qpos[address] for address in arm.qadr
+        ])
+        maximum_error = max(
+            maximum_error,
+            float(np.max(np.abs(measured[hand] - target))),
+        )
+        ct.qtgt[hand] = target.copy()
+        ct.grip_cmd[hand] = ct.GRIP_OPEN
+    ct.d.qvel[:] = 0.0
+    mujoco.mj_forward(ct.m, ct.d)
+    return {
+        "passed": maximum_error <= ARM_TRACK_TOL_RAD,
+        "target_joint_positions_rad": {
+            hand: list(values)
+            for hand, values in SORTING_ROLL_INITIAL_ARM_PARK.items()
+        },
+        "measured_joint_positions_rad": {
+            hand: np.round(values, 6).tolist()
+            for hand, values in measured.items()
+        },
+        "maximum_tracking_error_rad": round(maximum_error, 6),
+        "settle_steps": 240,
+    }
+
+
 def render_third_person(
     recorder,
     mujoco,
@@ -944,10 +1029,14 @@ class SortingRollExpert:
                 "applied": applied,
                 "manifest": str(args.manifest.resolve()),
             }
+        args.initial_arm_park_report = apply_sorting_roll_initial_park(
+            self.ct, self.mujoco
+        )
         self.pad_ids = {
             ct.gid(name)
             for name in ("L_pad1", "L_pad2", "R_pad1", "R_pad2")
         }
+        self.table_top_geom = ct.gid("table_top_col")
         self.pickup_support_geom_ids = {
             ct.gid(name)
             for name in (
@@ -1004,6 +1093,8 @@ class SortingRollExpert:
         self.gates = {}
         self.final_evidence = None
         self.sim_seconds = 0.0
+        self.early_collision_checks = 0
+        self.early_collision_events = []
 
         self.out.mkdir(parents=True)
         if args.review_videos:
@@ -1021,6 +1112,7 @@ class SortingRollExpert:
                 "task_version": self.task_version,
                 "seed": args.seed,
                 "collection_profile": PROFILE_NAME,
+                "initial_arm_park": args.initial_arm_park_report,
                 "diversity": self.diversity,
                 "training_eligible": False,
                 "simulation_canary_eligible": False,
@@ -1051,7 +1143,8 @@ class SortingRollExpert:
                 "synthetic_wrist_cameras_recorded": True,
                 "camera_extrinsics_source": (
                     "stereo_left_from_CRUZR_SDK; "
-                    "dual_D405_proxy_with_right_optical_roll_correction_pending_real_mount"
+                    "dual_D405_same_local_installation_transform_"
+                    "pending_real_mount_measurement"
                 ),
                 "camera_intrinsics_verified": SDK_CAMERA_INTRINSICS_VERIFIED,
                 "camera_fovy_status": (
@@ -1159,6 +1252,28 @@ class SortingRollExpert:
         self.ct.control_step(substeps)
         dt = float(substeps) * float(self.model.opt.timestep)
         self.sim_seconds += dt
+        phase = self.ct.REC["phase"]
+        if phase in EARLY_COLLISION_MONITOR_PHASES:
+            self.early_collision_checks += 1
+            contacts = self.early_unintended_arm_contacts(
+                allow_pad_roll=(
+                    phase in {
+                        "horizontal_approach_and_grasp",
+                        "lift_flat_from_pickup_support",
+                    }
+                )
+            )
+            if contacts:
+                event = {
+                    "phase": phase,
+                    "sim_seconds": round(self.sim_seconds, 4),
+                    "contacts": contacts,
+                }
+                self.early_collision_events.append(event)
+                raise ExpertFailure(
+                    "unintended early arm collision "
+                    + json.dumps(event, ensure_ascii=False)
+                )
         if self.recorder.n != previous:
             self.recorded_roll_qpos.append(
                 self.data.qpos[self.roll_qpos_adr:self.roll_qpos_adr + 7].copy()
@@ -1225,6 +1340,39 @@ class SortingRollExpert:
             )
             for hand, arm in (("l", self.ct.L), ("r", self.ct.R))
         }
+
+    def early_unintended_arm_contacts(self, allow_pad_roll=False):
+        contacts = []
+        for index in range(self.data.ncon):
+            geom1 = int(self.data.contact[index].geom1)
+            geom2 = int(self.data.contact[index].geom2)
+            if (
+                geom1 in self.arm_geom_ids["l"]
+                and geom2 in self.arm_geom_ids["l"]
+            ) or (
+                geom1 in self.arm_geom_ids["r"]
+                and geom2 in self.arm_geom_ids["r"]
+            ):
+                continue
+            pair = {geom1, geom2}
+            if not pair & (
+                self.arm_geom_ids["l"] | self.arm_geom_ids["r"]
+            ):
+                continue
+            if allow_pad_roll and self.roll_geom in pair:
+                other = geom2 if geom1 == self.roll_geom else geom1
+                if other in self.pad_ids:
+                    continue
+            contacts.append({
+                "pair": [self.geom_label(geom1), self.geom_label(geom2)],
+                "penetration_mm": round(
+                    -1000.0 * min(
+                        0.0, float(self.data.contact[index].dist)
+                    ),
+                    3,
+                ),
+            })
+        return contacts
 
     def contact_evidence(self, first_ids, second_ids):
         first_ids = set(first_ids)
@@ -1934,6 +2082,67 @@ class SortingRollExpert:
             if (contacts := self.moving_arm_contacts(hand))
         }
 
+    def flat_pick_pad_positions_in_base(self):
+        base = self.ct.base_pose()
+        origin = np.array([base[0], base[1], 0.0])
+        world_to_base = self.ct.base_rotz().T
+        return {
+            "l": world_to_base @ (self.ct.L.padmid() - origin),
+            "r": world_to_base @ (self.ct.R.padmid() - origin),
+        }
+
+    def flat_pick_pad_table_clearances(self):
+        return {
+            hand: self.minimum_geom_clearance(
+                {
+                    self.ct.gid(f"{hand.upper()}_pad1"),
+                    self.ct.gid(f"{hand.upper()}_pad2"),
+                },
+                {self.table_top_geom},
+            )
+            for hand in ("l", "r")
+        }
+
+    def verify_task_ready_arm_park(self):
+        targets = {
+            hand: np.asarray(values, dtype=float)
+            for hand, values in SORTING_ROLL_INITIAL_ARM_PARK.items()
+        }
+        measured = self.arm_joint_positions()
+        target_error = max(
+            float(np.max(np.abs(self.ct.qtgt[hand] - targets[hand])))
+            for hand in ("l", "r")
+        )
+        tracking_error = max(
+            float(np.max(np.abs(measured[hand] - targets[hand])))
+            for hand in ("l", "r")
+        )
+        pad_positions = self.flat_pick_pad_positions_in_base()
+        table_clearances = self.flat_pick_pad_table_clearances()
+        minimum_table_clearance_m = min(
+            evidence["distance_m"]
+            for evidence in table_clearances.values()
+        )
+        contacts = self.bimanual_contacts()
+        self.gate(
+            "task_ready_arm_park_held_after_stereo_localization",
+            target_error <= 1e-12
+            and tracking_error <= 0.03
+            and flat_pick_workspace_is_safe(
+                pad_positions["l"], pad_positions["r"]
+            )
+            and minimum_table_clearance_m
+            >= FLAT_PICK_PAD_TABLE_CLEARANCE_M
+            and not contacts,
+            f"target_error_rad={target_error:.6f} "
+            f"tracking_error_rad={tracking_error:.4f} "
+            f"minimum_table_clearance_mm="
+            f"{1000.0 * minimum_table_clearance_m:.3f} "
+            f"pad_positions_base_m="
+            f"{json.dumps({hand: np.round(position, 6).tolist() for hand, position in pad_positions.items()})} "
+            f"contacts={contacts}",
+        )
+
     def follow_coordinated_flat_pick_path(
         self,
         pregrasp_positions,
@@ -2028,6 +2237,11 @@ class SortingRollExpert:
         execution = []
         max_command_delta = 0.0
         validated_samples = 0
+        workspace_invalid_grid_nodes = 0
+        clearance_invalid_grid_nodes = 0
+        minimum_planned_clearance_m = math.inf
+        workspace_violation = None
+        clearance_violation = None
 
         def edge_is_safe(start_cell, target_cell):
             nonlocal edge_checks, edge_samples
@@ -2046,6 +2260,11 @@ class SortingRollExpert:
                     start + blend * (target - start)
                 )
                 edge_samples += 1
+                pad_positions = self.flat_pick_pad_positions_in_base()
+                if not flat_pick_workspace_is_safe(
+                    pad_positions["l"], pad_positions["r"]
+                ):
+                    return False
                 if self.bimanual_contacts():
                     return False
             return True
@@ -2054,6 +2273,27 @@ class SortingRollExpert:
             self.model.geom_size[self.roll_geom, 0] = (
                 original_roll_radius
                 + FLAT_PICK_ROLL_CLEARANCE_MARGIN_M
+            )
+            grid_table_clearances = {
+                hand: np.full(grid_steps + 1, math.inf)
+                for hand in ("l", "r")
+            }
+            reference = configuration_for_cell((0, 0))
+            for hand, offset in (("l", 0), ("r", 7)):
+                for index in range(grid_steps + 1):
+                    configuration = reference.copy()
+                    configuration[offset:offset + 7] = (
+                        grid_configurations[hand][index]
+                    )
+                    set_arm_configuration(configuration)
+                    grid_table_clearances[hand][index] = (
+                        self.flat_pick_pad_table_clearances()[hand][
+                            "distance_m"
+                        ]
+                    )
+            minimum_planned_clearance_m = min(
+                float(np.min(clearances))
+                for clearances in grid_table_clearances.values()
             )
             validity = np.zeros(
                 (grid_steps + 1, grid_steps + 1),
@@ -2064,7 +2304,27 @@ class SortingRollExpert:
                     set_arm_configuration(
                         configuration_for_cell((left, right))
                     )
-                    validity[left, right] = not self.bimanual_contacts()
+                    pad_positions = self.flat_pick_pad_positions_in_base()
+                    workspace_ok = flat_pick_workspace_is_safe(
+                        pad_positions["l"], pad_positions["r"]
+                    )
+                    if not workspace_ok:
+                        workspace_invalid_grid_nodes += 1
+                    minimum_clearance_m = min(
+                        grid_table_clearances["l"][left],
+                        grid_table_clearances["r"][right],
+                    )
+                    clearance_ok = (
+                        minimum_clearance_m
+                        >= FLAT_PICK_PAD_TABLE_CLEARANCE_M
+                    )
+                    if not clearance_ok:
+                        clearance_invalid_grid_nodes += 1
+                    validity[left, right] = (
+                        workspace_ok
+                        and clearance_ok
+                        and not self.bimanual_contacts()
+                    )
             valid_grid_nodes = int(np.count_nonzero(validity))
             planning_validity = coordination_clearance_mask(
                 validity,
@@ -2134,6 +2394,48 @@ class SortingRollExpert:
                             start + blend * (target - start)
                         )
                         validated_samples += 1
+                        pad_positions = (
+                            self.flat_pick_pad_positions_in_base()
+                        )
+                        if not flat_pick_workspace_is_safe(
+                            pad_positions["l"], pad_positions["r"]
+                        ):
+                            workspace_violation = {
+                                "segment": segment_index + 1,
+                                "sample": sample_index + 1,
+                                "pad_positions_base_m": {
+                                    hand: np.round(position, 6).tolist()
+                                    for hand, position
+                                    in pad_positions.items()
+                                },
+                            }
+                            collision = {
+                                "workspace": workspace_violation
+                            }
+                            break
+                        table_clearances = (
+                            self.flat_pick_pad_table_clearances()
+                        )
+                        minimum_clearance_m = min(
+                            evidence["distance_m"]
+                            for evidence in table_clearances.values()
+                        )
+                        if (
+                            minimum_clearance_m
+                            < FLAT_PICK_PAD_TABLE_CLEARANCE_M
+                        ):
+                            clearance_violation = {
+                                "segment": segment_index + 1,
+                                "sample": sample_index + 1,
+                                "minimum_clearance_mm": round(
+                                    1000.0 * minimum_clearance_m, 3
+                                ),
+                                "clearances": table_clearances,
+                            }
+                            collision = {
+                                "table_clearance": clearance_violation
+                            }
+                            break
                         contacts = self.bimanual_contacts()
                         if contacts:
                             collision = {
@@ -2163,6 +2465,12 @@ class SortingRollExpert:
             bool(cells) and collision is None,
             f"grid_nodes={(grid_steps + 1) ** 2} "
             f"valid_grid_nodes={valid_grid_nodes} "
+            f"workspace_invalid_grid_nodes="
+            f"{workspace_invalid_grid_nodes} "
+            f"clearance_invalid_grid_nodes="
+            f"{clearance_invalid_grid_nodes} "
+            f"minimum_table_clearance_mm="
+            f"{1000.0 * minimum_planned_clearance_m:.3f} "
             f"planning_grid_nodes={planning_grid_nodes} "
             f"path_nodes={len(cells)} "
             f"max_progress_gap={max_progress_gap:.4f} "
@@ -2175,11 +2483,55 @@ class SortingRollExpert:
             f"collision={collision}",
         )
 
+        workspace_trace = {
+            hand: [position.copy()]
+            for hand, position
+            in self.flat_pick_pad_positions_in_base().items()
+        }
+        table_clearance_trace = {
+            hand: [evidence["distance_m"]]
+            for hand, evidence
+            in self.flat_pick_pad_table_clearances().items()
+        }
         for target in execution:
             self.ct.qtgt["l"][:] = target[:7]
             self.ct.qtgt["r"][:] = target[7:]
             self.ct.base_vel[:] = 0.0
             self.frames(1)
+            pad_positions = self.flat_pick_pad_positions_in_base()
+            for hand in ("l", "r"):
+                workspace_trace[hand].append(
+                    pad_positions[hand].copy()
+                )
+            if not flat_pick_workspace_is_safe(
+                pad_positions["l"], pad_positions["r"]
+            ):
+                self.gate(
+                    "coordinated_flat_pick_workspace_execution",
+                    False,
+                    "pad_positions_base_m="
+                    + json.dumps({
+                        hand: np.round(position, 6).tolist()
+                        for hand, position in pad_positions.items()
+                    }),
+                )
+            table_clearances = self.flat_pick_pad_table_clearances()
+            for hand in ("l", "r"):
+                table_clearance_trace[hand].append(
+                    table_clearances[hand]["distance_m"]
+                )
+            minimum_clearance_m = min(
+                evidence["distance_m"]
+                for evidence in table_clearances.values()
+            )
+            if minimum_clearance_m < FLAT_PICK_PAD_TABLE_CLEARANCE_M:
+                self.gate(
+                    "coordinated_flat_pick_table_clearance_execution",
+                    False,
+                    f"minimum_clearance_mm="
+                    f"{1000.0 * minimum_clearance_m:.3f} "
+                    f"clearances={table_clearances}",
+                )
             contacts = self.bimanual_contacts()
             if contacts:
                 self.gate(
@@ -2190,6 +2542,68 @@ class SortingRollExpert:
         self.wait_arm_tracking(
             "coordinated_flat_pick_pregrasp",
             collision_free_hands=("l", "r"),
+        )
+        final_pad_positions = self.flat_pick_pad_positions_in_base()
+        final_table_clearances = (
+            self.flat_pick_pad_table_clearances()
+        )
+        for hand in ("l", "r"):
+            workspace_trace[hand].append(
+                final_pad_positions[hand].copy()
+            )
+            table_clearance_trace[hand].append(
+                final_table_clearances[hand]["distance_m"]
+            )
+        workspace_arrays = {
+            hand: np.asarray(trace, dtype=float)
+            for hand, trace in workspace_trace.items()
+        }
+        pad_path_lengths = {
+            hand: float(np.sum(np.linalg.norm(
+                np.diff(trace, axis=0), axis=1
+            )))
+            for hand, trace in workspace_arrays.items()
+        }
+        pad_backtracks = {
+            hand: float(np.sum(np.maximum(
+                0.0, -np.diff(trace[:, 0])
+            )))
+            for hand, trace in workspace_arrays.items()
+        }
+        minimum_side_margin = min(
+            float(np.min(workspace_arrays["l"][:, 1])),
+            float(np.min(-workspace_arrays["r"][:, 1])),
+        )
+        workspace_execution_ok = (
+            flat_pick_workspace_is_safe(
+                final_pad_positions["l"], final_pad_positions["r"]
+            )
+            and max(pad_path_lengths.values())
+            <= FLAT_PICK_PAD_PATH_MAX_M
+            and max(pad_backtracks.values())
+            <= FLAT_PICK_PAD_BACKTRACK_MAX_M
+        )
+        self.gate(
+            "coordinated_flat_pick_workspace_execution",
+            workspace_execution_ok,
+            f"minimum_side_margin_mm="
+            f"{1000.0 * minimum_side_margin:.1f} "
+            f"pad_path_length_m="
+            f"{json.dumps({hand: round(value, 4) for hand, value in pad_path_lengths.items()})} "
+            f"pad_backtrack_m="
+            f"{json.dumps({hand: round(value, 4) for hand, value in pad_backtracks.items()})}",
+        )
+        minimum_table_clearance_m = min(
+            min(trace) for trace in table_clearance_trace.values()
+        )
+        self.gate(
+            "coordinated_flat_pick_table_clearance_execution",
+            minimum_table_clearance_m
+            >= FLAT_PICK_PAD_TABLE_CLEARANCE_M,
+            f"minimum_clearance_mm="
+            f"{1000.0 * minimum_table_clearance_m:.3f} "
+            f"required_mm="
+            f"{1000.0 * FLAT_PICK_PAD_TABLE_CLEARANCE_M:.1f}",
         )
         self.gate(
             "collision_free_coordinated_flat_pick_execution",
@@ -2984,6 +3398,40 @@ class SortingRollExpert:
             steps_taken += 1
             self.require_held("integrated_top_tier_entry")
             axis = self.roll_axis()
+            if not insertion_axis_is_safe(axis):
+                roll_clearance = self.minimum_geom_clearance(
+                    {self.roll_geom}, self.integrated_support_geom_ids
+                )
+                pad_clearance = self.minimum_geom_clearance(
+                    self.pad_ids, self.shelf_geom_ids
+                )
+                correction_has_clearance = (
+                    insertion_axis_correction_has_clearance(
+                        roll_clearance["distance_m"],
+                        pad_clearance["distance_m"],
+                    )
+                )
+                self.gate(
+                    "integrated_entry_axis_correction_clearance",
+                    correction_has_clearance,
+                    f"roll_clearance_mm="
+                    f"{1000.0 * roll_clearance['distance_m']:.3f} "
+                    f"pad_clearance_mm="
+                    f"{1000.0 * pad_clearance['distance_m']:.3f}",
+                )
+                left_delta = symmetric_axis_correction(
+                    axis,
+                    self.ct.L.padmid(),
+                    self.ct.R.padmid(),
+                    TARGET_AXIS,
+                    INSERT_AXIS_CORRECTION_MAX_STEP_M,
+                )
+                self.move_mount_command_deltas(
+                    {"l": left_delta, "r": -left_delta},
+                    shelf_safe=True,
+                )
+                self.require_held("correcting_integrated_entry_axis")
+                axis = self.roll_axis()
             self.gate(
                 "axis_safe_during_integrated_entry",
                 insertion_axis_is_safe(axis),
@@ -3318,6 +3766,20 @@ class SortingRollExpert:
         return positions, rotations
 
     def execute(self):
+        park_report = self.args.initial_arm_park_report
+        self.gates["sorting_roll_initial_arm_park"] = park_report
+        self.gate(
+            "sorting_roll_initial_arm_park",
+            park_report["passed"],
+            json.dumps(park_report, ensure_ascii=False),
+        )
+        initial_contacts = self.early_unintended_arm_contacts()
+        self.gate(
+            "initial_arm_park_collision_free",
+            not initial_contacts,
+            f"contacts={initial_contacts}",
+        )
+
         camera_report = camera_mount_report(
             self.mujoco,
             self.model,
@@ -3335,6 +3797,18 @@ class SortingRollExpert:
             raise ExpertFailure(
                 "recorded camera mounts do not match the SDK contract"
             )
+
+        wrist_camera_report = wrist_camera_initialization_report(
+            self.mujoco, self.model, self.data
+        )
+        self.ct.REC["metadata"][
+            "wrist_d405_initialization_report"
+        ] = wrist_camera_report
+        self.gate(
+            "wrist_d405_initialization",
+            wrist_camera_report["passed"],
+            json.dumps(wrist_camera_report, ensure_ascii=False),
+        )
 
         self.frames(12)
 
@@ -3377,7 +3851,20 @@ class SortingRollExpert:
             f"base={np.round(base, 4).tolist()}",
         )
 
-        self.phase("approach_table_with_arms_down")
+        self.phase("localize_roll_with_head_stereo")
+        self.frames(30)
+
+        self.phase(
+            "confirm_task_ready_arm_park_after_stereo_localization"
+        )
+        self.verify_task_ready_arm_park()
+        staged_targets = {
+            hand: self.ct.qtgt[hand].copy()
+            for hand in ("l", "r")
+        }
+        staged_joints = self.arm_joint_positions()
+
+        self.phase("approach_table_with_arms_staged")
         self.go_to(
             TABLE_GRASP_XY,
             -math.pi / 2.0,
@@ -3397,24 +3884,29 @@ class SortingRollExpert:
         )
         measured_joints = self.arm_joint_positions()
         target_motion = max(
-            float(np.max(np.abs(self.ct.qtgt[hand] - initial_targets[hand])))
+            float(np.max(np.abs(
+                self.ct.qtgt[hand] - staged_targets[hand]
+            )))
             for hand in ("l", "r")
         )
         measured_motion = max(
             float(np.max(np.abs(
-                measured_joints[hand] - initial_joints[hand]
+                measured_joints[hand] - staged_joints[hand]
             )))
             for hand in ("l", "r")
         )
         self.gate(
-            "arms_unchanged_through_table_approach",
+            "staged_arms_unchanged_through_table_approach",
             target_motion <= 1e-12 and measured_motion <= 0.03,
             f"target_motion_rad={target_motion:.6f} "
             f"measured_motion_rad={measured_motion:.4f}",
         )
-
-        self.phase("localize_roll_with_head_stereo")
-        self.frames(30)
+        self.gate(
+            "collision_free_initial_observation_and_table_approach",
+            not self.early_collision_events,
+            f"checks={self.early_collision_checks} "
+            f"events={self.early_collision_events}",
+        )
 
         roll = self.roll_position()
         grasp_positions, rotations = self.flat_pick_mount_poses(roll)
@@ -3990,6 +4482,7 @@ def main(argv=None):
     scene_path = sorting_roll_scene.materialize_scene()
     ct = load_teleop(scene_path, args.gpu, args.seed, prompt=prompt)
     import mujoco
+    apply_model_camera_overrides(mujoco, ct.m)
     from sorting_roll_task import evaluate_placement, SortingRollSuccessTracker
     from teleop_timing import CumulativeSubstepScheduler
 

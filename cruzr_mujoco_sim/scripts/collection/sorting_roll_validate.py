@@ -27,7 +27,7 @@ from sorting_roll_diversity import (  # noqa: E402
 
 
 TASK = "sorting_roll_cruzr"
-TASK_VERSION = "sorting_roll_v13_d405_rearward_mount_sim"
+TASK_VERSION = "sorting_roll_v15_d405_isomorphic_forward_park_sim"
 SUPPORTED_TASK_VERSIONS = (TASK_VERSION, DIVERSE_TASK_VERSION)
 FPS = 30
 MAX_CAMERA_STATE_SKEW_S = 0.020
