@@ -38,6 +38,7 @@ class Pi05SortingRollV13TrainTest(unittest.TestCase):
         self.assertIn("GPU_IDS=${GPU_IDS:-0,1,2,3}", self.source)
         self.assertIn("NUM_PROCESSES=${NUM_PROCESSES:-4}", self.source)
         self.assertIn("BATCH_SIZE=${BATCH_SIZE:-1}", self.source)
+        self.assertIn("WARMUP_STEPS=${WARMUP_STEPS:-500}", self.source)
         self.assertIn("--allow-small-batch true", self.source)
         self.assertIn("--gradient-checkpointing true", self.source)
         self.assertIn("--train-expert-only true", self.source)

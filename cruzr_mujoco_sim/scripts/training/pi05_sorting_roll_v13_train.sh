@@ -12,6 +12,7 @@ READINESS_REPORT=$SIM_ROOT/output/sorting_roll_expert/sorting_roll_v13_diverse30
 BASE_POLICY=$PROJECT_ROOT/pretrained/pi05_base_remapped
 FORMAL_OUTPUT=${FORMAL_OUTPUT:-$SIM_ROOT/out/training/pi05_sorting_roll_v13_formal10k_20260825}
 FORMAL_LOG=${FORMAL_LOG:-$PROJECT_ROOT/log/pi05_sorting_roll_v13_formal10k_20260825.log}
+FORMAL_JOB_NAME=${FORMAL_JOB_NAME:-pi05_sorting_roll_v13_formal10k}
 ISAAC_PY=${ISAAC_PY:-/isaac-sim/python.sh}
 
 GPU_IDS=${GPU_IDS:-0,1,2,3}
@@ -20,6 +21,7 @@ BATCH_SIZE=${BATCH_SIZE:-1}
 NUM_WORKERS=${NUM_WORKERS:-2}
 MAIN_PROCESS_PORT=${MAIN_PROCESS_PORT:-29514}
 TARGET_STEPS=${TARGET_STEPS:-10000}
+WARMUP_STEPS=${WARMUP_STEPS:-500}
 SAVE_FREQ=${SAVE_FREQ:-500}
 LOG_FREQ=${LOG_FREQ:-10}
 
@@ -104,7 +106,7 @@ common_args=(
   --episodes train
   --base-policy "$BASE_POLICY"
   --output-dir "$FORMAL_OUTPUT"
-  --job-name pi05_sorting_roll_v13_formal10k
+  --job-name "$FORMAL_JOB_NAME"
   --log-file "$FORMAL_LOG"
   --gpu-ids "$GPU_IDS"
   --num-processes "$NUM_PROCESSES"
@@ -121,7 +123,7 @@ common_args=(
   --learning-rate 2.5e-5
   --weight-decay 0.01
   --grad-clip-norm 1.0
-  --warmup-steps 500
+  --warmup-steps "$WARMUP_STEPS"
   --decay-steps "$TARGET_STEPS"
   --image-transforms false
   --use-imagenet-stats true
@@ -146,7 +148,7 @@ case "$action" in
     ;;
   status)
     exec bash "$PROJECT_ROOT/pi05_train.sh" status \
-      --output-dir "$FORMAL_OUTPUT" --job-name pi05_sorting_roll_v13_formal10k \
+      --output-dir "$FORMAL_OUTPUT" --job-name "$FORMAL_JOB_NAME" \
       --log-file "$FORMAL_LOG" --isaac-python "$ISAAC_PY"
     ;;
   help|-h|--help)

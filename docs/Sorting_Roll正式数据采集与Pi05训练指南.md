@@ -1,6 +1,6 @@
 # Sorting Roll 正式数据采集与 π0.5 训练指南
 
-> 状态：2026-08-25 v13 已完成 5×20 准入、正式 300 回合、源数据验证、LeRobot v3.0 审计和 π0.5 20→40-step 断点续训 canary，`ready_for_formal_training=true`。当前可以正式开始训练，但尚未启动 10k-step 长训练。后续 Sorting Roll 仿真采集、数据验收和训练以本文档为准。
+> 状态：2026-08-25 v13 已完成 5×20 准入、正式 300 回合、源数据验证、LeRobot v3.0 审计、4×4090 20→40-step canary，以及 2×H100 200→250-step fresh/resume canary。2×H100 的 20k expert-only 正式配置 dry-run 已通过，正式训练按要求尚未启动。后续 Sorting Roll 仿真采集、数据验收和训练以本文档为准。
 
 v12 的 5×20 物理准入为 97/100，但真实轨迹回放暴露腕部相机在插入/释放阶段看不到一体式槽接触区，因此被相机硬门拒绝。v13 仅将双腕 D405 沿安装支架后移 90 mm，保持安装方向、任务语义、成功标准和专家动作不变。高风险 heavy/low-friction boundary seed 10084 在 58.47 秒内成功，validator 1/1 通过，相机审计 54/54、所需角色 54/54，平均每个关键样本有 2.81 路可用视角。正式准入五组成功数为 20/20、20/20、19/20、20/20、19/20，98 个成功源全部通过 validator。正式采集首轮成功 292/300，8 个失败源均被物理硬门拒绝；8 个按缺失配额定向生成的替补 seed 首次尝试全部成功，最终得到 300/300 个唯一且通过 validator 的回合。v12 数据不得改标签或混入 v13。
 
@@ -348,6 +348,28 @@ bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_train.sh resume
 
 只有 4 卡 canary 稳定后才考虑 8 卡。8 卡需要重新做 DDP canary；不得假定卡数翻倍就一定更省钱或更快。
 
+### 10.1 当前采用的 2×H100 正式训练配置
+
+当前硬件已切换为两张 H100 80GB，使用专用入口：
+
+```bash
+# 只检查，不启动
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_h100x2_train.sh dry-run
+
+# 用户确认后才执行
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_h100x2_train.sh start
+
+# 启动后查看状态或从最近完整 checkpoint 恢复
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_h100x2_train.sh status
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_h100x2_train.sh resume
+```
+
+固定配置为：2 个 DDP 进程、每卡 batch 16、有效 batch 32、每进程 8 个 DataLoader worker、BF16、gradient checkpointing、`train_expert_only=true`、20,000 steps、warmup 1,000 steps、每 1,000 steps 保存。训练参数总数为 4,143,404,816，可训练 expert 参数为 693,422,112；因此每卡约 20.9 GiB 显存是正常结果，不能以“填满显存”为目标擅自改为全参数训练。
+
+本机实测结果：fresh 1→200 正常结束，loss 从 2.610 降至 0.170，无 OOM、NaN 或 Inf；step 200 的模型、优化器和 RNG 状态均完整可读。随后从 step 200 恢复到 step 250，loss 保持在 0.160–0.180、梯度范数保持有限，最终 checkpoint 完整。8 workers 预热后的 `data_s` 为 0.422–0.790 秒，优于 4 workers 常见的 1.2–3.6 秒，因此正式配置保留 8 workers。
+
+截至本文更新时，正式 20k 输出目录尚未创建，正式训练进程未运行。只有用户明确确认后才执行 `start`；底层使用 `nohup + setsid`，启动成功后可以断开 SSH。
+
 ## 11. 扩大数据和正式训练的进入条件
 
 300 回合训练完成后，先在未见过的 test seed 上做至少 50 次闭环仿真评测：
@@ -393,6 +415,9 @@ v13 定版证据：
 - `log/sorting_roll_v13_diverse300_20260825_4gpu/pi05_canary_audit.json`（4×4090 短训练及恢复审计，`passed=true`）
 - `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v13_diverse300_20260825_4gpu/formal_training_readiness.json`（全部前置检查通过，`ready_for_formal_training=true`）
 - `cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_train.sh`（固定到上述数据与审计结果的正式训练入口）
+- `cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_h100x2_train.sh`（2×H100 专用 200→250 canary、20k dry-run/start/resume/status 入口）
+- `cruzr_mujoco_sim/out/training/pi05_sorting_roll_v13_h100x2_canary_seed1000/checkpoints/000250/`（2×H100 expert-only fresh/resume 最终完整 checkpoint）
+- `log/pi05_sorting_roll_v13_h100x2_canary_seed1000.log`（2×H100 canary 完整日志，最终退出码 0）
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v12_diverse_admission_20260825_4gpu/`（拒绝证据：物理 97/100，但首个重放审计仅 90.2% 总覆盖、70.6% 所需角色覆盖，无准入报告）
 
 v10 历史证据（不可混入 v13）：
