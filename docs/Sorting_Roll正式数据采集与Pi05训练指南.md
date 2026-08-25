@@ -1,8 +1,8 @@
 # Sorting Roll 正式数据采集与 π0.5 训练指南
 
-> 状态：2026-08-25 v13 高风险 pilot 已通过，5×20 四卡准入正在 tmux 中运行；只有准入报告、300 回合源数据、LeRobot v3.0 审计及 π0.5 短训练全部通过后，才允许开始长训练。后续 Sorting Roll 仿真采集、数据验收和训练以本文档为准。
+> 状态：2026-08-25 v13 已完成 5×20 准入、正式 300 回合、源数据验证、LeRobot v3.0 审计和 π0.5 20→40-step 断点续训 canary，`ready_for_formal_training=true`。当前可以正式开始训练，但尚未启动 10k-step 长训练。后续 Sorting Roll 仿真采集、数据验收和训练以本文档为准。
 
-v12 的 5×20 物理准入为 97/100，但真实轨迹回放暴露腕部相机在插入/释放阶段看不到一体式槽接触区，因此被相机硬门拒绝。v13 仅将双腕 D405 沿安装支架后移 90 mm，保持安装方向、任务语义、成功标准和专家动作不变。高风险 heavy/low-friction boundary seed 10084 在 58.47 秒内成功，validator 1/1 通过，相机审计 54/54、所需角色 54/54，平均每个关键样本有 2.81 路可用视角。v12 数据不得改标签或混入 v13。
+v12 的 5×20 物理准入为 97/100，但真实轨迹回放暴露腕部相机在插入/释放阶段看不到一体式槽接触区，因此被相机硬门拒绝。v13 仅将双腕 D405 沿安装支架后移 90 mm，保持安装方向、任务语义、成功标准和专家动作不变。高风险 heavy/low-friction boundary seed 10084 在 58.47 秒内成功，validator 1/1 通过，相机审计 54/54、所需角色 54/54，平均每个关键样本有 2.81 路可用视角。正式准入五组成功数为 20/20、20/20、19/20、20/20、19/20，98 个成功源全部通过 validator。正式采集首轮成功 292/300，8 个失败源均被物理硬门拒绝；8 个按缺失配额定向生成的替补 seed 首次尝试全部成功，最终得到 300/300 个唯一且通过 validator 的回合。v12 数据不得改标签或混入 v13。
 
 ## 1. 已定版的基线与版本边界
 
@@ -118,7 +118,7 @@ tmux new-session -d -s sorting_roll_v13_admission \
 - 8×4090 只在以下情况使用：目标扩大到 1,000 回合以上、4 卡预估无法满足截止时间，或已经确认 CPU、文件系统和 JPEG 写入不是瓶颈。
 - 单张 4090 同时只运行一个渲染 shard。增加同卡并发通常会放大显存、EGL 和 I/O 风险。
 - 多卡只缩短采集墙钟时间，不改变 seed、数据分布、成功标准或格式。
-- 本机 GPU 0–3 的 4×4090 采集与短训练链路已在 v10 验证；v13 当前完成单卡高风险 pilot，5×20 准入正在四卡运行。若迁移到 8 卡机器，还必须重新执行环境检查和 DDP canary。
+- 本机 GPU 0–3 的 4×4090 已完成 v13 的 5×20 准入、正式 300 回合采集和 20→40-step DDP canary。若迁移到 8 卡机器，还必须重新执行环境检查和 DDP canary。
 
 ## 5. 采集前检查
 
@@ -304,6 +304,8 @@ PYTHONPATH=. "$ISAAC_PY" \
 
 转换脚本会原地修改目标，因此先复制并保留 `$DATASET_V21`。转换后必须核对 `meta/info.json` 和统计文件，并用真实 `LeRobotDataset` 解码首帧、尾帧及每个 diversity stratum 的随机样本。v3 审计通过前不要删除 v2.1 staging 备份。
 
+v13 实际审计结果：300 episodes、519,776 frames，train/val/test 为 240/30/30；三路视频均为 H.264、`yuv420p`、`224×224 @ 30 FPS`，每路均有 519,776 帧；`observation.state` 与 `action` 均为 18 维 `float32`，全量 Parquet 数值有限。审计实际通过 `LeRobotDataset` 解码 8 个分层 episode 的 24 个样本，未发现错误。审计报告位于 `log/sorting_roll_v13_diverse300_20260825_4gpu/dataset_v30_audit.json`。
+
 ## 10. π0.5 训练前 canary
 
 先用 4×4090 做 20-step expert-only DDP canary；4090 上不要直接照搬 H100 的每卡 batch。当前已验证的安全起点是每卡 batch 1、BF16 和 gradient checkpointing。
@@ -326,7 +328,23 @@ bash pi05_train.sh dry-run \
 - checkpoint 完整可读取，并能从该 checkpoint 恢复到至少第 40 步。
 - 训练只使用 train split，val/test 不得进入优化器。
 
-v10 的 2026-08-25 历史实测中，训练只读取 train split 的 240 个回合；fresh 20-step 与 20→40-step resume 均以退出码 0 完成。该结果只证明旧版本的数据加载、DDP、保存与恢复链路可用；v13 必须重新执行本节 canary，不得继承 v10 的训练通过结论。
+v13 已只使用 train split 的 240 个回合完成 4×4090 canary：fresh 1→20 和 checkpoint resume 21→40 均以退出码 0 完成，step 20/40 的模型、优化器和 RNG safetensors 均完整可读。40 个测量全部有限；step 32 曾出现有限的 loss/gradient 瞬时峰值，下一步即恢复，未触发 NaN/Inf 或训练失败。正式训练需继续监控此指标，若峰值持续或发散则按第 12 节停止。
+
+正式训练使用专用入口；默认动作是 `dry-run`，不会启动训练：
+
+```bash
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_train.sh dry-run
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_train.sh start
+```
+
+入口固定检查 v13 数据版本和审计证据，默认使用 4×4090、每卡 batch 1、BF16、gradient checkpointing、expert-only，训练 10,000 steps，每 500 steps 保存。底层启动器使用 `nohup + setsid` 脱离 SSH；断开连接不会终止训练。查看状态或断点续训：
+
+```bash
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_train.sh status
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_train.sh resume
+```
+
+`resume` 必须保留 `--allow-small-batch true`；专用入口已经固定传入该参数。不要改用不属于本任务的 `pi05_formal300_train.sh`。
 
 只有 4 卡 canary 稳定后才考虑 8 卡。8 卡需要重新做 DDP canary；不得假定卡数翻倍就一定更省钱或更快。
 
@@ -358,11 +376,23 @@ v10 的 2026-08-25 历史实测中，训练只读取 train split 的 240 个回�
 
 ## 13. 当前保留的定版证据
 
-v13 当前基线证据：
+v13 定版证据：
 
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v13_diverse_admission_20260825_4gpu/groups/dynamics_heavy_low_friction/seed_10084/sorting_roll_robot_multiview.mp4`（高风险 boundary 三路审核视频：1280×720、30 FPS、58.47 秒）
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v13_diverse_admission_20260825_4gpu/groups/dynamics_heavy_low_friction/seed_10084/pilot_validator_report.json`（validator 1/1 通过）
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v13_diverse_admission_20260825_4gpu/groups/dynamics_heavy_low_friction/seed_10084/camera_observability.json`（54/54 覆盖，所需相机角色 54/54，平均 2.81 路可用视角）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/v13_diverse_admission_20260825_4gpu/admission_report.json`（5×20 准入 98/100 成功，五组 validator 与相机门全部通过）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v13_diverse300_20260825_4gpu/initial_collection_report.json`（正式首轮 292/300 成功，成功率 97.33%）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v13_diverse300_20260825_4gpu/replacement_plan.json`（8 个失败源的配额保持替补计划）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v13_diverse300_20260825_4gpu/selection_report.json`（最终 300 个唯一成功源，所有分层配额精确满足）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v13_diverse300_20260825_4gpu/validation_report.json`（源数据 300/300 validator 通过）
+- `cruzr_mujoco_sim/out/datasets/sorting_roll_v13_diverse300_lerobot_v21_20260825/`（v2.1 staging：300 episodes、519,776 frames、900 个源视频流）
+- `cruzr_mujoco_sim/out/datasets/sorting_roll_v13_diverse300_lerobot_v30_20260825/`（LeRobot v3.0 正式训练数据）
+- `log/sorting_roll_v13_diverse300_20260825_4gpu/dataset_v30_audit.json`（格式、类型、视频和真实解码审计，`passed=true`）
+- `cruzr_mujoco_sim/out/training/pi05_sorting_roll_v13_canary_20260825/`（π0.5 fresh step 20 与 resume step 40 完整 checkpoint）
+- `log/sorting_roll_v13_diverse300_20260825_4gpu/pi05_canary_audit.json`（4×4090 短训练及恢复审计，`passed=true`）
+- `cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v13_diverse300_20260825_4gpu/formal_training_readiness.json`（全部前置检查通过，`ready_for_formal_training=true`）
+- `cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v13_train.sh`（固定到上述数据与审计结果的正式训练入口）
 - `cruzr_mujoco_sim/output/sorting_roll_expert/v12_diverse_admission_20260825_4gpu/`（拒绝证据：物理 97/100，但首个重放审计仅 90.2% 总覆盖、70.6% 所需角色覆盖，无准入报告）
 
 v10 历史证据（不可混入 v13）：
