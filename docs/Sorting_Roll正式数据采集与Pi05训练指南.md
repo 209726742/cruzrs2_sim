@@ -1,18 +1,23 @@
 # Sorting Roll 正式数据采集与 π0.5 训练指南
 
-> 状态：2026-08-26。首轮 v15 准入为 97/100，但 medium 组仅 17/20，因此被严格拒绝。根因是架外下降暂存点离后板过近；暂存点后移 10 mm 后，原故障 3/3、跨长度与重量边界回归 7/7、全量测试 203/203 均通过。8×4090 正在从干净目录重跑 5×20 最终准入；通过后由 tmux 自动接管 300 回合采集、同配额补采、300/300 validator、代表视频、LeRobot v3.0 构建和数据审计。v13 数据与 expert-only checkpoint 只保留为历史证据，禁止混入 v15 数据集或代替 v15 全参数 canary。正式训练尚未启动。
+> 状态：2026-08-27。v15 数据流水线已完成并通过准入。暂存点后移 10 mm 后，最终 5×20 fresh 准入分别为 19/20、20/20、18/20、20/20、20/20，所有组均达到至少 18/20；正式首轮采集 293/300 成功，7 个同配额补采全部成功，最终选择 300 个唯一成功回合。源 validator 为 300/300，LeRobot v3.0 审计为 `passed=true`、`errors=[]`，训练准入为 `ready_for_full_parameter_canary=true`。正式训练尚未启动；下一阶段只允许在 4×H100 80GB 上先做全参数 fresh/resume canary，审计通过后再启动约 20 小时的正式训练。
 
 v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推导初始姿态：双臂直接初始化在前向、左右镜像且可观察自身夹爪的任务就绪位，不再执行原来前 25 秒的抬臂绕行。高风险 heavy/low-friction seed 10084 在 50.517 秒内成功，早期 806 次碰撞检查无事件；validator 1/1 通过，相机总覆盖和必需角色覆盖均为 100%，平均每个关键样本有 2.78 路可用视角。棒子最终由一体式顶层槽提供四点接触，松手后稳定 2 秒且双手撤回。
 
 ## 0. v15 当前执行门
 
-当前正式基线是：
+当前定版结果：
 
 - 专家动作：`sorting_roll_v15_d405_isomorphic_forward_park_sim`
 - 多样性数据：`sorting_roll_v15_diverse_sim`
 - 相机配置：`sorting_roll_d405_candidate_v6`
 - 策略输入：`stereo_left + left_wrist_realsense + right_wrist_realsense`
-- 采集硬件：8×RTX 4090；准入只有 5 个独立组，因此使用 GPU 0–4，正式 300 回合使用 GPU 0–7。
+- 采集结果：8×RTX 4090 已完成；最终 300 个成功回合、458,786 帧，train/val/test 为 240/30/30。
+- 数据格式：LeRobot v3.0；三路 H.264/yuv420p RGB、224×224@30 FPS；state/action 均为 18 维 float32。
+- 数据集：`cruzr_mujoco_sim/out/datasets/sorting_roll_v15_diverse300_20260826_8x4090_lerobot_v30`
+- 审计：`log/sorting_roll_v15_diverse300_20260826_8x4090/dataset_v30_audit.json`
+- 准入：`cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v15_diverse300_20260826_8x4090/data_training_readiness.json`
+- 代表视频：`cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v15_diverse300_20260826_8x4090/review_bundle/seed_3090/sorting_roll_robot_multiview.mp4`
 - 训练候选：4×H100 80GB、每卡 batch 16、有效 batch 64、BF16、gradient checkpointing、`train_expert_only=false`、学习率 `2.5e-5`、28,000 step。该配置来自本机既有 4×H100 全参实测（完整 28k checkpoint 约 20 小时 14 分），仍必须先由 v15 fresh/resume canary 最终确认。
 
 进入正式训练的固定顺序：
@@ -23,21 +28,29 @@ v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推�
 4. 4×H100 全参 fresh 200-step canary，再 resume 到 250 step；核对显存、有限 loss/gradient 和 checkpoint 完整性。
 5. 只有上述证据全部通过，才启动约 20 小时、28k step 的正式全参训练。
 
-当前自动流水线与后续训练入口：
+后续训练入口：
 
 ```bash
-# 当前 8×4090 后台流水线状态
-tmux list-sessions
-tail -f cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v15_diverse300_20260826_8x4090/pipeline.log
+# 换到 4×H100 80GB 后；先检查硬件和 dry-run
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh hardware-check
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh canary-dry-run
 
-# 换到 4×H100 后；必须依次 fresh canary、resume canary、审计，再启动正式训练
+# 依次 fresh 200 step、resume 到 250 step、审计；每个 tmux 阶段结束后再执行下一条
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-canary
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-canary-resume
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh canary-audit
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh recommend-20h
+
+# 最终 dry-run 通过后，才启动约 20 小时的 28k 全参数训练
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh dry-run
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-start
+
+# 查看状态；SSH/进程中断时从最近完整 checkpoint 恢复
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh status
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-resume
 ```
 
-在 v15 `data_training_readiness.json` 和 canary 审计变为通过前，本文后续出现的 v13 路径与命令均为历史流程说明，禁止作为当前启动命令。
+`data_training_readiness.json` 已通过；当前唯一未完成的硬门是 4×H100 v15 全参数 canary。本文后续出现的 v13/v10 路径、expert-only checkpoint 和采集模板均为历史流程说明，禁止作为当前启动命令。
 
 ## 1. 已定版的基线与版本边界
 
