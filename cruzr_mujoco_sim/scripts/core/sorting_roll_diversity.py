@@ -3,6 +3,7 @@
 
 import argparse
 from collections import Counter
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -400,6 +401,21 @@ def assignment_for_seed(payload, seed):
     if len(matches) != 1:
         raise ValueError(f"manifest has {len(matches)} assignments for seed {seed}")
     return matches[0]
+
+
+def replacement_assignment(source, seed):
+    errors = assignment_errors(source)
+    if errors:
+        raise ValueError("invalid source assignment: " + "; ".join(errors))
+    replacement = copy.deepcopy(source)
+    replacement["seed"] = int(seed)
+    replacement["split"] = source_split(seed)
+    replacement.pop("assignment_id", None)
+    replacement["assignment_id"] = _assignment_id(replacement)
+    errors = assignment_errors(replacement)
+    if errors:
+        raise ValueError("invalid replacement assignment: " + "; ".join(errors))
+    return replacement
 
 
 def apply_model_diversity(mujoco, model, data, assignment):

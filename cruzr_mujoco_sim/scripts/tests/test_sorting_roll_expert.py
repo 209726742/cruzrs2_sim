@@ -54,6 +54,7 @@ from sorting_roll_expert import (
     RELEASE_DROP_MAX_M,
     RELEASE_FRICTION_SETTLE_TICKS,
     RELEASE_GUARDED_DROP_Z_M,
+    RELEASE_REFERENCE_DIAMETER_M,
     RELEASE_INSERT_STEP_M,
     RELEASE_INSERT_TARGET_X_M,
     RELEASE_OPEN_BACKOFF_MAX_M,
@@ -87,6 +88,7 @@ from sorting_roll_expert import (
     flat_pick_workspace_is_safe,
     integrated_depth_margin,
     guarded_release_geometry_is_ready,
+    guarded_release_center_z,
     guarded_release_is_ready,
     flatten_target_rotation,
     grasp_target_rotation,
@@ -238,6 +240,22 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertAlmostEqual(RELEASE_CLEARANCE_LIFT_M, 0.050)
         self.assertAlmostEqual(RELEASE_PAD_SLIDING_FRICTION, 1.0)
         self.assertEqual(RELEASE_FRICTION_SETTLE_TICKS, 12)
+
+    def test_guarded_release_center_preserves_roll_bottom_height(self):
+        reference_radius = 0.5 * RELEASE_REFERENCE_DIAMETER_M
+        short_radius = 0.5 * 0.0225
+        self.assertAlmostEqual(
+            guarded_release_center_z(reference_radius),
+            RELEASE_GUARDED_DROP_Z_M,
+        )
+        self.assertAlmostEqual(
+            guarded_release_center_z(short_radius),
+            RELEASE_GUARDED_DROP_Z_M - 0.00075,
+        )
+        self.assertAlmostEqual(
+            guarded_release_center_z(short_radius) - short_radius,
+            RELEASE_GUARDED_DROP_Z_M - reference_radius,
+        )
 
     def test_guarded_release_bounds_drop_and_pad_clearance(self):
         self.assertTrue(guarded_release_is_ready(0.020, 0.003))

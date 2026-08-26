@@ -129,6 +129,7 @@ ARM_RETRACT_M = 0.082
 HAND_FLAT_ROLL_Z = 1.240
 RELEASE_APPROACH_Y_BIAS_M = 0.000
 RELEASE_CLEARANCE_ROLL_Z = 0.955
+RELEASE_REFERENCE_DIAMETER_M = 0.024
 RELEASE_GUARDED_DROP_Z_M = 0.951
 RELEASE_INSERT_TARGET_X_M = float(TARGET_CENTER[0]) + 0.040
 RELEASE_DROP_MAX_M = 0.025
@@ -721,6 +722,13 @@ def integrated_depth_margin(
     return min(
         center_x - half_x - TOP_TIER_FRONT_LIP_X_M,
         TOP_TIER_BACK_INNER_X_M - center_x - half_x,
+    )
+
+
+def guarded_release_center_z(roll_radius):
+    return (
+        RELEASE_GUARDED_DROP_Z_M
+        + float(roll_radius) - 0.5 * RELEASE_REFERENCE_DIAMETER_M
     )
 
 
@@ -4171,7 +4179,10 @@ class SortingRollExpert:
 
         self.phase("position_guarded_release_clearance")
         guarded_release_target = entry_target.copy()
-        guarded_release_target[2] = RELEASE_GUARDED_DROP_Z_M
+        roll_radius = float(
+            self.model.geom_size[self.roll_geom, 0]
+        )
+        guarded_release_target[2] = guarded_release_center_z(roll_radius)
         self.align_roll_center(
             guarded_release_target,
             "guarded_release_height",

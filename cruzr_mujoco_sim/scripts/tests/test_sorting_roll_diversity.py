@@ -19,11 +19,30 @@ from sorting_roll_diversity import (  # noqa: E402
     apply_model_diversity,
     generate_manifest,
     manifest_errors,
+    replacement_assignment,
 )
 from sorting_roll_task import target_placement_smoke  # noqa: E402
 
 
 class SortingRollDiversityTest(unittest.TestCase):
+    def test_replacement_preserves_stratum_and_recomputes_identity(self):
+        manifest = generate_manifest("replacement_test", 3000, 20)
+        source = manifest["assignments"][0]
+        replacement = replacement_assignment(source, 3300)
+        self.assertEqual(replacement["seed"], 3300)
+        self.assertEqual(replacement["split"], source["split"])
+        self.assertNotEqual(replacement["assignment_id"], source["assignment_id"])
+        for field in (
+            "pose_bin",
+            "prompt_id",
+            "object_profile",
+            "appearance_profile",
+            "lighting_profile",
+            "dynamics_profile",
+            "image_profile",
+        ):
+            self.assertEqual(replacement[field], source[field])
+
     def test_long_profile_preserves_the_24_mm_collision_baseline(self):
         self.assertEqual(OBJECT_PROFILES["long_baseline"]["length_m"], 0.5)
         self.assertEqual(OBJECT_PROFILES["long_baseline"]["diameter_m"], 0.024)

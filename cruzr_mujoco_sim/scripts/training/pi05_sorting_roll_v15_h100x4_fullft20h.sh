@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SIM_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+PROJECT_ROOT=$(cd "$SIM_ROOT/.." && pwd)
+BASE_LAUNCHER=$PROJECT_ROOT/pi05_train.sh
+ISAAC_PY=${ISAAC_PY:-/isaac-sim/python.sh}
+
+CAMPAIGN=sorting_roll_v15_diverse300_20260826_8x4090
+SOURCE_ROOT=$SIM_ROOT/output/sorting_roll_expert/$CAMPAIGN
+DATASET_ROOT=$SIM_ROOT/out/datasets/${CAMPAIGN}_lerobot_v30
+DATASET_AUDIT=$PROJECT_ROOT/log/$CAMPAIGN/dataset_v30_audit.json
+DATA_READINESS=$SOURCE_ROOT/data_training_readiness.json
+BASE_POLICY=$PROJECT_ROOT/pretrained/pi05_base_remapped
+REPO_ID=local/$CAMPAIGN
+
+CANARY_OUTPUT=$SIM_ROOT/out/training/pi05_sorting_roll_v15_h100x4_fullft_canary_seed1000
+CANARY_LOG=$PROJECT_ROOT/log/pi05_sorting_roll_v15_h100x4_fullft_canary_seed1000.log
+CANARY_AUDIT=$PROJECT_ROOT/log/$CAMPAIGN/pi05_h100x4_fullft_canary_audit.json
+FORMAL_OUTPUT=${FORMAL_OUTPUT:-$SIM_ROOT/out/training/pi05_sorting_roll_v15_h100x4_fullft24k_seed1000}
+FORMAL_LOG=${FORMAL_LOG:-$PROJECT_ROOT/log/pi05_sorting_roll_v15_h100x4_fullft24k_seed1000.log}
+
+GPU_IDS=0,1,2,3
+NUM_PROCESSES=4
+BATCH_SIZE=${BATCH_SIZE:-16}
+NUM_WORKERS=${NUM_WORKERS:-8}
+TARGET_STEPS=${TARGET_STEPS:-24000}
+SAVE_FREQ=${SAVE_FREQ:-1000}
+LOG_FREQ=${LOG_FREQ:-10}
+LEARNING_RATE=${LEARNING_RATE:-2.5e-5}
+WARMUP_STEPS=${WARMUP_STEPS:-1000}
+SEED=1000
+
+usage() {
+  printf '%s\n' \
+    'Usage:' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh hardware-check' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh canary-dry-run' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-canary' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-canary-resume' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh canary-audit' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh recommend-20h' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh dry-run' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-start' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-resume' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh status'
+}
+
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+hardware_preflight() {
+  command -v nvidia-smi >/dev/null || die "nvidia-smi is unavailable"
+  local rows
+  rows=$(nvidia-smi -i "$GPU_IDS" \
+    --query-gpu=index,name,memory.total,mig.mode.current \
+    --format=csv,noheader,nounits)
+  "$PROJECT_ROOT/envs/mjx/bin/python" - "$rows" <<'PY'
+import sys
+
+rows = [line.strip() for line in sys.argv[1].splitlines() if line.strip()]
+assert len(rows) == 4, rows
+for expected, row in enumerate(rows):
+    index, name, memory, mig = (
+        part.strip() for part in row.split(",", 3)
+    )
+    assert int(index) == expected, row
+    assert "H100" in name, row
+    assert int(memory) >= 80000, row
+    assert mig.lower() == "disabled", row
+print("hardware gate passed: 4xH100 >=80GB, MIG disabled")
+PY
+}
+
+data_preflight() {
+  [[ -x "$ISAAC_PY" ]] || die "Isaac Python is unavailable: $ISAAC_PY"
+  [[ -f "$DATASET_ROOT/meta/info.json" ]] || die "dataset is not ready"
+  [[ -f "$DATASET_AUDIT" ]] || die "dataset audit is missing"
+  [[ -f "$DATA_READINESS" ]] || die "data readiness report is missing"
+  [[ -d "$BASE_POLICY" ]] || die "base policy is missing"
+  "$ISAAC_PY" - "$DATASET_ROOT/meta/info.json" "$DATASET_AUDIT" "$DATA_READINESS" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+info, audit, readiness = (
+    json.loads(Path(path).read_text(encoding="utf-8"))
+    for path in sys.argv[1:]
+)
+expected_cameras = {
+    "observation.images.stereo_left",
+    "observation.images.left_wrist_realsense",
+    "observation.images.right_wrist_realsense",
+}
+assert info["codebase_version"] == "v3.0"
+assert info["source_task_version"] == "sorting_roll_v15_diverse_sim"
+assert info["collection_profile"] == "sorting_roll_d405_candidate_v6"
+assert info["total_episodes"] == info["total_source_episodes"] == 300
+assert info["splits"] == {"train": "0:240", "val": "240:270", "test": "270:300"}
+features = info["features"]
+actual_cameras = {
+    key for key, value in features.items() if value.get("dtype") == "video"
+}
+assert actual_cameras == expected_cameras, actual_cameras
+for camera in expected_cameras:
+    assert features[camera]["shape"] == [224, 224, 3]
+    assert features[camera]["info"]["video.fps"] == 30
+for key in ("observation.state", "action"):
+    assert features[key]["dtype"] == "float32"
+    assert features[key]["shape"] == [18]
+assert audit["passed"] is True and audit["errors"] == []
+assert readiness["ready_for_full_parameter_canary"] is True
+print("v15 data gate passed: 300 episodes, 3 cameras, 30 FPS, 18D state/action")
+PY
+}
+
+set_train_args() {
+  local output=$1
+  local log=$2
+  local job=$3
+  local steps=$4
+  local warmup=$5
+  local decay=$6
+  local save_freq=$7
+  local port=$8
+  TRAIN_ARGS=(
+    --dataset-root "$DATASET_ROOT"
+    --repo-id "$REPO_ID"
+    --episodes train
+    --base-policy "$BASE_POLICY"
+    --output-dir "$output"
+    --job-name "$job"
+    --log-file "$log"
+    --gpu-ids "$GPU_IDS"
+    --num-processes "$NUM_PROCESSES"
+    --batch-size "$BATCH_SIZE"
+    --num-workers "$NUM_WORKERS"
+    --port "$port"
+    --steps "$steps"
+    --save-freq "$save_freq"
+    --log-freq "$LOG_FREQ"
+    --seed "$SEED"
+    --dtype bfloat16
+    --gradient-checkpointing true
+    --train-expert-only false
+    --min-effective-batch 64
+    --learning-rate "$LEARNING_RATE"
+    --weight-decay 0.01
+    --grad-clip-norm 1.0
+    --warmup-steps "$warmup"
+    --decay-steps "$decay"
+    --n-action-steps 50
+    --num-inference-steps 10
+    --video-backend pyav
+    --image-transforms false
+    --use-imagenet-stats true
+    --wandb false
+    --wandb-mode offline
+    --offline true
+    --isaac-python "$ISAAC_PY"
+  )
+}
+
+canary_args() {
+  local steps=$1
+  local save_freq=$2
+  set_train_args \
+    "$CANARY_OUTPUT" "$CANARY_LOG" \
+    pi05_sorting_roll_v15_h100x4_fullft_canary \
+    "$steps" 20 200 "$save_freq" 29535
+}
+
+formal_args() {
+  set_train_args \
+    "$FORMAL_OUTPUT" "$FORMAL_LOG" \
+    pi05_sorting_roll_v15_h100x4_fullft24k \
+    "$TARGET_STEPS" "$WARMUP_STEPS" "$TARGET_STEPS" "$SAVE_FREQ" 29536
+}
+
+formal_preflight() {
+  [[ -f "$CANARY_AUDIT" ]] || die "run canary-audit before formal training"
+  "$PROJECT_ROOT/envs/mjx/bin/python" - "$CANARY_AUDIT" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert report["passed"] is True and report["errors"] == []
+assert report["fresh_and_resume_exit_zero"] is True
+assert report["train_expert_only"] is False
+assert report["effective_batch_size"] == 64
+print("full-parameter canary gate passed")
+PY
+}
+
+launch_tmux() {
+  local session=$1
+  local action=$2
+  local log=$3
+  tmux has-session -t "$session" 2>/dev/null && die "tmux session exists: $session"
+  tmux new-session -d -s "$session" \
+    "cd '$PROJECT_ROOT' && bash '$0' '$action'; pid=\$(cat '$log.pid'); tail --pid=\$pid -F '$log'"
+  printf 'tmux session: %s\n' "$session"
+}
+
+action=${1:-dry-run}
+[[ $# -eq 0 ]] || shift
+[[ $# -eq 0 ]] || die "unexpected arguments: $*"
+
+case "$action" in
+  hardware-check)
+    hardware_preflight
+    ;;
+  canary-dry-run)
+    hardware_preflight
+    data_preflight
+    canary_args 200 200
+    exec bash "$BASE_LAUNCHER" dry-run "${TRAIN_ARGS[@]}"
+    ;;
+  canary)
+    hardware_preflight
+    data_preflight
+    canary_args 200 200
+    exec bash "$BASE_LAUNCHER" start "${TRAIN_ARGS[@]}"
+    ;;
+  canary-resume)
+    hardware_preflight
+    data_preflight
+    canary_args 250 50
+    exec bash "$BASE_LAUNCHER" resume "${TRAIN_ARGS[@]}"
+    ;;
+  tmux-canary)
+    launch_tmux sorting_roll_v15_h100x4_fullft_canary canary "$CANARY_LOG"
+    ;;
+  tmux-canary-resume)
+    launch_tmux sorting_roll_v15_h100x4_fullft_canary_resume canary-resume "$CANARY_LOG"
+    ;;
+  canary-audit)
+    data_preflight
+    exec "$ISAAC_PY" \
+      "$SCRIPT_DIR/sorting_roll_v15_fullft_canary_audit.py" \
+      --output "$CANARY_OUTPUT" \
+      --log "$CANARY_LOG" \
+      --dataset "$DATASET_ROOT" \
+      --report "$CANARY_AUDIT"
+    ;;
+  recommend-20h)
+    [[ -f "$CANARY_AUDIT" ]] || die "run canary-audit first"
+    "$PROJECT_ROOT/envs/mjx/bin/python" - "$CANARY_AUDIT" <<'PY'
+import json
+import sys
+
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert report["passed"] is True
+seconds = report.get("mean_seconds_per_step_without_checkpoint")
+print("Recommended formal target: 24000 steps")
+print("Historical 4xH100 full-parameter throughput: about 1200 steps/hour")
+if seconds:
+    print(f"Current canary compute/data mean: {seconds:.3f} s/step (checkpoint time excluded)")
+print("Expected wall time: approximately 20 hours; use TARGET_STEPS to override after canary.")
+PY
+    ;;
+  dry-run)
+    hardware_preflight
+    data_preflight
+    formal_args
+    exec bash "$BASE_LAUNCHER" dry-run "${TRAIN_ARGS[@]}"
+    ;;
+  start)
+    hardware_preflight
+    data_preflight
+    formal_preflight
+    formal_args
+    exec bash "$BASE_LAUNCHER" start "${TRAIN_ARGS[@]}"
+    ;;
+  resume)
+    hardware_preflight
+    data_preflight
+    formal_preflight
+    formal_args
+    exec bash "$BASE_LAUNCHER" resume "${TRAIN_ARGS[@]}"
+    ;;
+  tmux-start)
+    launch_tmux sorting_roll_v15_h100x4_fullft24k start "$FORMAL_LOG"
+    ;;
+  tmux-resume)
+    launch_tmux sorting_roll_v15_h100x4_fullft24k_resume resume "$FORMAL_LOG"
+    ;;
+  status)
+    formal_args
+    bash "$BASE_LAUNCHER" status \
+      --output-dir "$FORMAL_OUTPUT" \
+      --job-name pi05_sorting_roll_v15_h100x4_fullft24k \
+      --log-file "$FORMAL_LOG" \
+      --isaac-python "$ISAAC_PY"
+    tmux list-sessions 2>/dev/null || true
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    usage >&2
+    die "unknown action: $action"
+    ;;
+esac

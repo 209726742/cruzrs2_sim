@@ -1,6 +1,6 @@
 # Sorting Roll 正式数据采集与 π0.5 训练指南
 
-> 状态：2026-08-25 v15 单回合高风险随机化复核已通过，正在进入 5×20 多样性准入。v15 改变了初始手臂状态和腕部图像内容，因此 v13 数据与 expert-only checkpoint 只保留为历史证据，禁止混入 v15 数据集或用来代替 v15 全参 canary。正式训练尚未启动。
+> 状态：2026-08-26。v15 短棒释放高度修正后的严格物理探针已通过，8×4090 正在执行 5×20 多样性准入；准入结束后由 tmux 自动接管 300 回合采集、同配额补采、300/300 validator、代表视频、LeRobot v3.0 构建和数据审计。v13 数据与 expert-only checkpoint 只保留为历史证据，禁止混入 v15 数据集或代替 v15 全参数 canary。正式训练尚未启动。
 
 v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推导初始姿态：双臂直接初始化在前向、左右镜像且可观察自身夹爪的任务就绪位，不再执行原来前 25 秒的抬臂绕行。高风险 heavy/low-friction seed 10084 在 50.517 秒内成功，早期 806 次碰撞检查无事件；validator 1/1 通过，相机总覆盖和必需角色覆盖均为 100%，平均每个关键样本有 2.78 路可用视角。棒子最终由一体式顶层槽提供四点接触，松手后稳定 2 秒且双手撤回。
 
@@ -12,17 +12,32 @@ v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推�
 - 多样性数据：`sorting_roll_v15_diverse_sim`
 - 相机配置：`sorting_roll_d405_candidate_v6`
 - 策略输入：`stereo_left + left_wrist_realsense + right_wrist_realsense`
-- 训练方式：2×H100 80GB、BF16、gradient checkpointing、`train_expert_only=false`；batch 必须由 v15 全参 canary 实测后锁定，不能沿用 v13 expert-only 的每卡 batch 16。
+- 采集硬件：8×RTX 4090；准入只有 5 个独立组，因此使用 GPU 0–4，正式 300 回合使用 GPU 0–7。
+- 训练候选：4×H100 80GB、每卡 batch 16、有效 batch 64、BF16、gradient checkpointing、`train_expert_only=false`、学习率 `2.5e-5`、24,000 step。该配置来自本机既有 4×H100 全参 30k 实测，仍必须先由 v15 fresh/resume canary 最终确认。
 
 进入正式训练的固定顺序：
 
 1. v15 5×20 准入，每组至少 18/20，并通过 validator 和相机门。
 2. 重新采集 v15 多样性 300 回合；旧 v13 回合不得复用。
 3. 构建并审计 LeRobot v3.0：三路 H.264/yuv420p RGB、30 FPS、224×224，state/action 均为 18 维 float32，train/val/test 为 240/30/30。
-4. 2×H100 全参 fresh 200-step canary，再 resume 到 250 step；核对显存、有限 loss/gradient 和 checkpoint 完整性。
-5. 只有上述证据全部通过，才启动 20k 正式全参训练。
+4. 4×H100 全参 fresh 200-step canary，再 resume 到 250 step；核对显存、有限 loss/gradient 和 checkpoint 完整性。
+5. 只有上述证据全部通过，才启动约 20 小时、24k step 的正式全参训练。
 
-在 v15 数据集和入口生成前，本文后续出现的 v13 路径与命令均为历史流程说明，禁止作为当前启动命令。
+当前自动流水线与后续训练入口：
+
+```bash
+# 当前 8×4090 后台流水线状态
+tmux list-sessions
+tail -f cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v15_diverse300_20260826_8x4090/pipeline.log
+
+# 换到 4×H100 后；必须依次 fresh canary、resume canary、审计，再启动正式训练
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-canary
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-canary-resume
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh canary-audit
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-start
+```
+
+在 v15 `data_training_readiness.json` 和 canary 审计变为通过前，本文后续出现的 v13 路径与命令均为历史流程说明，禁止作为当前启动命令。
 
 ## 1. 已定版的基线与版本边界
 
