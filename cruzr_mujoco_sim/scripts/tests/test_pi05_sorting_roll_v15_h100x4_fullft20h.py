@@ -7,6 +7,7 @@ import unittest
 
 SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = SCRIPTS_ROOT / "training" / "pi05_sorting_roll_v15_h100x4_fullft20h.sh"
+AUTO_LAUNCHER = SCRIPTS_ROOT / "training" / "pi05_sorting_roll_v15_h100x4_auto20h.sh"
 AUDITOR = SCRIPTS_ROOT / "training" / "sorting_roll_v15_fullft_canary_audit.py"
 DATASET_AUDITOR = SCRIPTS_ROOT / "training" / "sorting_roll_v15_dataset_audit.py"
 
@@ -15,6 +16,7 @@ class Pi05SortingRollV15H100x4Fullft20hTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = LAUNCHER.read_text(encoding="utf-8")
+        cls.auto_source = AUTO_LAUNCHER.read_text(encoding="utf-8")
         cls.audit_source = AUDITOR.read_text(encoding="utf-8")
         cls.dataset_audit_source = DATASET_AUDITOR.read_text(encoding="utf-8")
 
@@ -67,6 +69,19 @@ class Pi05SortingRollV15H100x4Fullft20hTest(unittest.TestCase):
             "tmux-resume",
         ):
             self.assertIn(action, self.source)
+
+    def test_auto_pipeline_is_tmux_backed_and_hard_gated(self):
+        subprocess.run(["bash", "-n", str(AUTO_LAUNCHER)], check=True)
+        self.assertIn('tmux new-session -d -s "$SESSION"', self.auto_source)
+        self.assertIn('wait_for_job "fresh canary"', self.auto_source)
+        self.assertIn('wait_for_job "resumed canary"', self.auto_source)
+        self.assertIn('bash "$LAUNCHER" canary-audit', self.auto_source)
+        self.assertIn('bash "$LAUNCHER" dry-run', self.auto_source)
+        self.assertIn('wait_for_job "formal training"', self.auto_source)
+        self.assertLess(
+            self.auto_source.index('bash "$LAUNCHER" canary-audit'),
+            self.auto_source.index('bash "$LAUNCHER" start'),
+        )
 
 
 if __name__ == "__main__":

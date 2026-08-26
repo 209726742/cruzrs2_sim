@@ -2,6 +2,8 @@
 
 > 状态：2026-08-27。v15 数据流水线已完成并通过准入。暂存点后移 10 mm 后，最终 5×20 fresh 准入分别为 19/20、20/20、18/20、20/20、20/20，所有组均达到至少 18/20；正式首轮采集 293/300 成功，7 个同配额补采全部成功，最终选择 300 个唯一成功回合。源 validator 为 300/300，LeRobot v3.0 审计为 `passed=true`、`errors=[]`，训练准入为 `ready_for_full_parameter_canary=true`。正式训练尚未启动；下一阶段只允许在 4×H100 80GB 上先做全参数 fresh/resume canary，审计通过后再启动约 20 小时的正式训练。
 
+> 4×H100 执行状态：总控 tmux `sorting_roll_v15_h100x4_auto20h` 已启动；fresh canary 已确认四卡参与，且可训练参数与总参数均为 4,143,404,816。总控会在 fresh 200 step、resume 250 step 和 canary 审计全部通过后自动启动正式 28k 全参数训练；当前仍处于 canary 阶段。
+
 v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推导初始姿态：双臂直接初始化在前向、左右镜像且可观察自身夹爪的任务就绪位，不再执行原来前 25 秒的抬臂绕行。高风险 heavy/low-friction seed 10084 在 50.517 秒内成功，早期 806 次碰撞检查无事件；validator 1/1 通过，相机总覆盖和必需角色覆盖均为 100%，平均每个关键样本有 2.78 路可用视角。棒子最终由一体式顶层槽提供四点接触，松手后稳定 2 秒且双手撤回。
 
 ## 0. v15 当前执行门
@@ -31,6 +33,12 @@ v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推�
 后续训练入口：
 
 ```bash
+# 推荐：一条命令启动 tmux 总控；硬门失败时不会进入正式训练
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_auto20h.sh start
+
+# 查看总控、canary 或正式训练状态
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_auto20h.sh status
+
 # 换到 4×H100 80GB 后；先检查硬件和 dry-run
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh hardware-check
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh canary-dry-run
@@ -48,6 +56,12 @@ bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh
 # 查看状态；SSH/进程中断时从最近完整 checkpoint 恢复
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh status
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-resume
+```
+
+总控脚本按顺序等待 fresh canary、resume canary 和审计全部成功，再启动正式训练；任一阶段失败都会停止。正式训练由独立 supervisor 脱离 SSH，且每 1,000 step 保存完整 checkpoint。中断后可执行：
+
+```bash
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_auto20h.sh resume-formal
 ```
 
 `data_training_readiness.json` 已通过；当前唯一未完成的硬门是 4×H100 v15 全参数 canary。本文后续出现的 v13/v10 路径、expert-only checkpoint 和采集模板均为历史流程说明，禁止作为当前启动命令。
