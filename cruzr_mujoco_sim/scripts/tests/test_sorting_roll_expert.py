@@ -95,6 +95,7 @@ from sorting_roll_expert import (
     insertion_axis_is_safe,
     insertion_axis_correction_has_clearance,
     mount_position_for_pad_target,
+    minimum_kinematic_geom_clearance,
     joint_polyline_at_progress,
     parse_args,
     rotation_x,
@@ -200,7 +201,10 @@ class SortingRollExpertTest(unittest.TestCase):
             source.index("    def slowly_enter_integrated_top_tier("):
             source.index("    def level_release_support_surfaces(")
         ]
-        self.assertIn("if not insertion_axis_is_safe(axis):", method)
+        self.assertIn(
+            "for correction_attempt in range(ENTRY_AXIS_ARM_ATTEMPTS):",
+            method,
+        )
         self.assertIn(
             "insertion_axis_correction_has_clearance(",
             method,
@@ -212,8 +216,8 @@ class SortingRollExpertTest(unittest.TestCase):
     def test_release_geometry_enters_before_lowering_and_lifts_to_exit(self):
         self.assertAlmostEqual(ARM_RETRACT_M, 0.082)
         self.assertAlmostEqual(SHELF_STAGE_OFFSET_X, -0.050)
-        self.assertAlmostEqual(RELEASE_CLEARANCE_ROLL_Z, 0.955)
-        self.assertAlmostEqual(RELEASE_GUARDED_DROP_Z_M, 0.951)
+        self.assertAlmostEqual(RELEASE_CLEARANCE_ROLL_Z, 0.958)
+        self.assertAlmostEqual(RELEASE_GUARDED_DROP_Z_M, 0.950)
         self.assertAlmostEqual(RELEASE_APPROACH_Y_BIAS_M, 0.0)
         self.assertAlmostEqual(
             RELEASE_INSERT_TARGET_X_M,
@@ -288,6 +292,44 @@ class SortingRollExpertTest(unittest.TestCase):
             resolved_geom_clearance(-0.001, 0.020, False),
             -0.001,
         )
+
+    def test_kinematic_clearance_detects_separation_and_overlap(self):
+        import mujoco
+
+        model = mujoco.MjModel.from_xml_string("""
+            <mujoco>
+              <worldbody>
+                <body name="first" pos="0 0 0">
+                  <geom name="first_geom" type="sphere" size="0.1"/>
+                </body>
+                <body name="second" pos="0.25 0 0">
+                  <geom name="second_geom" type="sphere" size="0.1"/>
+                </body>
+              </worldbody>
+            </mujoco>
+        """)
+        data = mujoco.MjData(model)
+        first = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_GEOM, "first_geom"
+        )
+        second = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_GEOM, "second_geom"
+        )
+        mujoco.mj_kinematics(model, data)
+        separated = minimum_kinematic_geom_clearance(
+            mujoco, model, data, {first}, {second}
+        )
+        self.assertAlmostEqual(separated["distance_m"], 0.05)
+
+        second_body = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_BODY, "second"
+        )
+        model.body_pos[second_body, 0] = 0.15
+        mujoco.mj_kinematics(model, data)
+        overlapping = minimum_kinematic_geom_clearance(
+            mujoco, model, data, {first}, {second}
+        )
+        self.assertLess(overlapping["distance_m"], 0.0)
 
     def test_cosine_steps_respects_peak_step_bound(self):
         steps = cosine_steps(1.0, 0.01, minimum=2)

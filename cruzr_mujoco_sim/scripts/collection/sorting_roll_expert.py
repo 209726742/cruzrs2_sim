@@ -128,9 +128,9 @@ PRE_RELEASE_ENDPOINT_MARGIN_M = 0.020
 ARM_RETRACT_M = 0.082
 HAND_FLAT_ROLL_Z = 1.240
 RELEASE_APPROACH_Y_BIAS_M = 0.000
-RELEASE_CLEARANCE_ROLL_Z = 0.955
+RELEASE_CLEARANCE_ROLL_Z = 0.958
 RELEASE_REFERENCE_DIAMETER_M = 0.024
-RELEASE_GUARDED_DROP_Z_M = 0.951
+RELEASE_GUARDED_DROP_Z_M = 0.950
 RELEASE_INSERT_TARGET_X_M = float(TARGET_CENTER[0]) + 0.040
 RELEASE_DROP_MAX_M = 0.025
 RELEASE_PAD_SHELF_CLEARANCE_MIN_M = 0.002
@@ -761,6 +761,46 @@ def resolved_geom_clearance(raw_distance, witness_distance, has_contact):
     if raw_distance == 0.0 and witness_distance > 0.0:
         return witness_distance
     return raw_distance
+
+
+def minimum_kinematic_geom_clearance(
+    mujoco_module,
+    model,
+    data,
+    first_ids,
+    second_ids,
+):
+    best = None
+    for first in sorted(first_ids):
+        for second in sorted(second_ids):
+            fromto = np.zeros(6, dtype=float)
+            raw_distance = float(mujoco_module.mj_geomDistance(
+                model,
+                data,
+                int(first),
+                int(second),
+                0.25,
+                fromto,
+            ))
+            witness_distance = float(np.linalg.norm(
+                fromto[3:] - fromto[:3]
+            ))
+            distance = resolved_geom_clearance(
+                raw_distance,
+                witness_distance,
+                False,
+            )
+            if best is None or distance < best["distance_m"]:
+                best = {
+                    "distance_m": distance,
+                    "raw_distance_m": raw_distance,
+                    "witness_distance_m": witness_distance,
+                    "pair": [int(first), int(second)],
+                    "fromto_m": np.round(fromto, 6).tolist(),
+                }
+    if best is None:
+        raise ValueError("geom clearance requires non-empty sets")
+    return best
 
 
 def insertion_axis_is_safe(roll_axis):
@@ -1780,13 +1820,26 @@ class SortingRollExpert:
                     )
                     for address, value in zip(arm.qadr, configuration):
                         self.data.qpos[address] = value
-                self.mujoco.mj_forward(self.model, self.data)
-                contacts = self.arm_shelf_contacts()
-                if contacts:
+                self.mujoco.mj_kinematics(self.model, self.data)
+                clearance = minimum_kinematic_geom_clearance(
+                    self.mujoco,
+                    self.model,
+                    self.data,
+                    self.arm_geom_ids["l"] | self.arm_geom_ids["r"],
+                    self.shelf_geom_ids,
+                )
+                if clearance["distance_m"] <= 0.0:
                     collision = {
                         "sample": index,
                         "samples": steps,
-                        "contacts": contacts,
+                        "distance_mm": round(
+                            1000.0 * clearance["distance_m"], 3
+                        ),
+                        "pair": [
+                            self.geom_label(geom)
+                            for geom in clearance["pair"]
+                        ],
+                        "fromto_m": clearance["fromto_m"],
                     }
                     break
         finally:
@@ -3405,8 +3458,10 @@ class SortingRollExpert:
             )
             steps_taken += 1
             self.require_held("integrated_top_tier_entry")
-            axis = self.roll_axis()
-            if not insertion_axis_is_safe(axis):
+            for correction_attempt in range(ENTRY_AXIS_ARM_ATTEMPTS):
+                axis = self.roll_axis()
+                if insertion_axis_is_safe(axis):
+                    break
                 roll_clearance = self.minimum_geom_clearance(
                     {self.roll_geom}, self.integrated_support_geom_ids
                 )
@@ -3424,8 +3479,12 @@ class SortingRollExpert:
                     correction_has_clearance,
                     f"roll_clearance_mm="
                     f"{1000.0 * roll_clearance['distance_m']:.3f} "
+                    f"roll_pair={roll_clearance['pair']} "
                     f"pad_clearance_mm="
-                    f"{1000.0 * pad_clearance['distance_m']:.3f}",
+                    f"{1000.0 * pad_clearance['distance_m']:.3f} "
+                    f"pad_pair={pad_clearance['pair']} "
+                    f"pad_fromto_m={pad_clearance['fromto_m']} "
+                    f"attempt={correction_attempt + 1}",
                 )
                 left_delta = symmetric_axis_correction(
                     axis,
