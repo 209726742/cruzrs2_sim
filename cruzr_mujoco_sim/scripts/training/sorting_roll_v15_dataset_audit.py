@@ -44,7 +44,7 @@ def ffprobe(path):
     return streams[0]
 
 
-def finite_parquet_contract(root):
+def finite_parquet_contract(root, task_by_index, prompt_by_episode):
     frames = 0
     for path in sorted((root / "data").rglob("*.parquet")):
         parquet = pq.ParquetFile(path)
@@ -57,7 +57,13 @@ def finite_parquet_contract(root):
                 raise ValueError(f"{key} is not float32: {path}")
         for row_group in range(parquet.num_row_groups):
             table = parquet.read_row_group(
-                row_group, columns=["observation.state", "action"]
+                row_group,
+                columns=[
+                    "observation.state",
+                    "action",
+                    "episode_index",
+                    "task_index",
+                ],
             )
             frames += table.num_rows
             for key in ("observation.state", "action"):
@@ -66,6 +72,18 @@ def finite_parquet_contract(root):
                     raise ValueError(f"{key} has invalid shape in {path}")
                 if not np.isfinite(values).all():
                     raise ValueError(f"{key} contains NaN or Inf in {path}")
+            episode_indices = table["episode_index"].to_pylist()
+            task_indices = table["task_index"].to_pylist()
+            for episode_index, task_index in set(zip(
+                episode_indices, task_indices
+            )):
+                if task_by_index.get(task_index) != prompt_by_episode.get(
+                    episode_index
+                ):
+                    raise ValueError(
+                        "frame task_index does not match episode prompt: "
+                        f"episode={episode_index} task_index={task_index}"
+                    )
     return frames
 
 
@@ -106,6 +124,7 @@ def audit(args):
         "total_episodes": 300,
         "total_source_episodes": 300,
         "fps": 30,
+        "total_tasks": 5,
         "splits": {"train": "0:240", "val": "240:270", "test": "270:300"},
     }
     for key, expected in expected_info.items():
@@ -145,6 +164,22 @@ def audit(args):
         for path in episode_files
         for row in pq.read_table(path).to_pylist()
     ]
+    task_path = root / "meta" / "tasks.parquet"
+    task_rows = pq.read_table(task_path).to_pylist()
+    task_by_index = {
+        int(row["task_index"]): row["task"] for row in task_rows
+    }
+    prompt_by_episode = {
+        int(row["episode_index"]):
+        row["source_diversity"]["assignment"]["prompt"]
+        for row in episode_rows
+    }
+    if len(task_by_index) != len(task_rows):
+        errors.append("task metadata contains duplicate task indices")
+    if sorted(task_by_index) != list(range(5)):
+        errors.append("task metadata must contain indices 0 through 4")
+    if set(task_by_index.values()) != set(prompt_by_episode.values()):
+        errors.append("task metadata does not match source prompt texts")
     if len(episode_rows) != 300:
         errors.append(f"episode metadata count is {len(episode_rows)}, expected 300")
     else:
@@ -160,8 +195,16 @@ def audit(args):
             errors.append("episode metadata contains another camera profile")
         if source_diversity_counts(episode_rows) != selection.get("counts"):
             errors.append("episode diversity counts do not match source selection")
+        if any(
+            row.get("tasks")
+            != [row["source_diversity"]["assignment"]["prompt"]]
+            for row in episode_rows
+        ):
+            errors.append("episode task text does not match source prompt")
 
-    parquet_frames = finite_parquet_contract(root)
+    parquet_frames = finite_parquet_contract(
+        root, task_by_index, prompt_by_episode
+    )
     if parquet_frames != info.get("total_frames"):
         errors.append("Parquet frame count does not match info.json")
 
@@ -239,6 +282,7 @@ def audit(args):
         "video_streams": video_streams,
         "sampled_episode_count": len(SAMPLED_EPISODES),
         "decoded_sample_count": len(decoded),
+        "tasks": task_by_index,
         "sampled_episodes": list(SAMPLED_EPISODES),
         "decoded_samples": decoded,
         "errors": errors,

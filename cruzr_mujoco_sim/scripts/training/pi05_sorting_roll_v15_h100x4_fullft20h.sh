@@ -99,6 +99,7 @@ assert info["codebase_version"] == "v3.0"
 assert info["source_task_version"] == "sorting_roll_v15_diverse_sim"
 assert info["collection_profile"] == "sorting_roll_d405_candidate_v6"
 assert info["total_episodes"] == info["total_source_episodes"] == 300
+assert info["total_tasks"] == 5
 assert info["splits"] == {"train": "0:240", "val": "240:270", "test": "270:300"}
 features = info["features"]
 actual_cameras = {

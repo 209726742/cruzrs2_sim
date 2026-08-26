@@ -8,6 +8,7 @@ import unittest
 SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = SCRIPTS_ROOT / "training" / "pi05_sorting_roll_v15_h100x4_fullft20h.sh"
 AUDITOR = SCRIPTS_ROOT / "training" / "sorting_roll_v15_fullft_canary_audit.py"
+DATASET_AUDITOR = SCRIPTS_ROOT / "training" / "sorting_roll_v15_dataset_audit.py"
 
 
 class Pi05SortingRollV15H100x4Fullft20hTest(unittest.TestCase):
@@ -15,6 +16,7 @@ class Pi05SortingRollV15H100x4Fullft20hTest(unittest.TestCase):
     def setUpClass(cls):
         cls.source = LAUNCHER.read_text(encoding="utf-8")
         cls.audit_source = AUDITOR.read_text(encoding="utf-8")
+        cls.dataset_audit_source = DATASET_AUDITOR.read_text(encoding="utf-8")
 
     def test_launcher_has_valid_shell_syntax(self):
         subprocess.run(["bash", "-n", str(LAUNCHER)], check=True)
@@ -45,6 +47,8 @@ class Pi05SortingRollV15H100x4Fullft20hTest(unittest.TestCase):
     def test_data_and_canary_gates_precede_formal_training(self):
         self.assertIn('info["source_task_version"] == "sorting_roll_v15_diverse_sim"', self.source)
         self.assertIn('info["total_episodes"] == info["total_source_episodes"] == 300', self.source)
+        self.assertIn('info["total_tasks"] == 5', self.source)
+        self.assertIn("frame task_index does not match episode prompt", self.dataset_audit_source)
         self.assertIn("canary_args 200 200", self.source)
         self.assertIn("canary_args 250 50", self.source)
         self.assertIn("formal_preflight", self.source)
