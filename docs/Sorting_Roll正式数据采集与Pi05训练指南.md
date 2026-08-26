@@ -1,8 +1,8 @@
 # Sorting Roll 正式数据采集与 π0.5 训练指南
 
-> 状态：2026-08-27。v15 数据流水线已完成并通过准入。暂存点后移 10 mm 后，最终 5×20 fresh 准入分别为 19/20、20/20、18/20、20/20、20/20，所有组均达到至少 18/20；正式首轮采集 293/300 成功，7 个同配额补采全部成功，最终选择 300 个唯一成功回合。源 validator 为 300/300，LeRobot v3.0 审计为 `passed=true`、`errors=[]`，训练准入为 `ready_for_full_parameter_canary=true`。正式训练尚未启动；下一阶段只允许在 4×H100 80GB 上先做全参数 fresh/resume canary，审计通过后再启动约 20 小时的正式训练。
+> 状态：2026-08-27。v15 数据流水线已完成并通过准入。暂存点后移 10 mm 后，最终 5×20 fresh 准入分别为 19/20、20/20、18/20、20/20、20/20，所有组均达到至少 18/20；正式首轮采集 293/300 成功，7 个同配额补采全部成功，最终选择 300 个唯一成功回合。源 validator 为 300/300，LeRobot v3.0 审计为 `passed=true`、`errors=[]`。4×H100 全参数 fresh 200-step canary 和 resume 250-step canary 已通过，正式 28,000-step 训练已启动。
 
-> 4×H100 执行状态：总控 tmux `sorting_roll_v15_h100x4_auto20h` 已启动；fresh canary 已确认四卡参与，且可训练参数与总参数均为 4,143,404,816。总控会在 fresh 200 step、resume 250 step 和 canary 审计全部通过后自动启动正式 28k 全参数训练；当前仍处于 canary 阶段。
+> 4×H100 执行状态：canary 审计 `passed=true`、`errors=[]`，两次可训练参数与总参数均为 4,143,404,816，`train_expert_only=false`。正式训练于 2026-08-26 18:26 UTC 由总控 tmux `sorting_roll_v15_h100x4_auto20h` 启动；step 10 为 `loss=2.702`、`grad_norm=23.331`，四卡显存约 51.5 GB，指标有限且未见 OOM、NaN 或 Inf。
 
 v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推导初始姿态：双臂直接初始化在前向、左右镜像且可观察自身夹爪的任务就绪位，不再执行原来前 25 秒的抬臂绕行。高风险 heavy/low-friction seed 10084 在 50.517 秒内成功，早期 806 次碰撞检查无事件；validator 1/1 通过，相机总覆盖和必需角色覆盖均为 100%，平均每个关键样本有 2.78 路可用视角。棒子最终由一体式顶层槽提供四点接触，松手后稳定 2 秒且双手撤回。
 
@@ -20,7 +20,7 @@ v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推�
 - 审计：`log/sorting_roll_v15_diverse300_20260826_8x4090/dataset_v30_audit.json`
 - 准入：`cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v15_diverse300_20260826_8x4090/data_training_readiness.json`
 - 代表视频：`cruzr_mujoco_sim/output/sorting_roll_expert/sorting_roll_v15_diverse300_20260826_8x4090/review_bundle/seed_3090/sorting_roll_robot_multiview.mp4`
-- 训练候选：4×H100 80GB、每卡 batch 16、有效 batch 64、BF16、gradient checkpointing、`train_expert_only=false`、学习率 `2.5e-5`、28,000 step。该配置来自本机既有 4×H100 全参实测（完整 28k checkpoint 约 20 小时 14 分），仍必须先由 v15 fresh/resume canary 最终确认。
+- 正式训练：4×H100 80GB、每卡 batch 16、有效 batch 64、BF16、gradient checkpointing、`train_expert_only=false`、学习率 `2.5e-5`、28,000 step，每 1,000 step 保存完整 checkpoint。该配置来自本机既有 4×H100 全参实测（完整 28k checkpoint 约 20 小时 14 分），v15 fresh/resume canary 已最终确认。
 
 进入正式训练的固定顺序：
 
@@ -64,7 +64,7 @@ bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_auto20h.sh resume-formal
 ```
 
-`data_training_readiness.json` 已通过；当前唯一未完成的硬门是 4×H100 v15 全参数 canary。本文后续出现的 v13/v10 路径、expert-only checkpoint 和采集模板均为历史流程说明，禁止作为当前启动命令。
+`data_training_readiness.json` 和 `log/sorting_roll_v15_diverse300_20260826_8x4090/pi05_h100x4_fullft_canary_audit.json` 均已通过，正式训练正在运行。本文后续出现的 v13/v10 路径、expert-only checkpoint 和采集模板均为历史流程说明，禁止作为当前启动命令。
 
 ## 1. 已定版的基线与版本边界
 
