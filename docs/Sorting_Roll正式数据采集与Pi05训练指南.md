@@ -13,7 +13,7 @@ v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推�
 - 相机配置：`sorting_roll_d405_candidate_v6`
 - 策略输入：`stereo_left + left_wrist_realsense + right_wrist_realsense`
 - 采集硬件：8×RTX 4090；准入只有 5 个独立组，因此使用 GPU 0–4，正式 300 回合使用 GPU 0–7。
-- 训练候选：4×H100 80GB、每卡 batch 16、有效 batch 64、BF16、gradient checkpointing、`train_expert_only=false`、学习率 `2.5e-5`、24,000 step。该配置来自本机既有 4×H100 全参 30k 实测，仍必须先由 v15 fresh/resume canary 最终确认。
+- 训练候选：4×H100 80GB、每卡 batch 16、有效 batch 64、BF16、gradient checkpointing、`train_expert_only=false`、学习率 `2.5e-5`、28,000 step。该配置来自本机既有 4×H100 全参实测（完整 28k checkpoint 约 20 小时 14 分），仍必须先由 v15 fresh/resume canary 最终确认。
 
 进入正式训练的固定顺序：
 
@@ -21,7 +21,7 @@ v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推�
 2. 重新采集 v15 多样性 300 回合；旧 v13 回合不得复用。
 3. 构建并审计 LeRobot v3.0：三路 H.264/yuv420p RGB、30 FPS、224×224，state/action 均为 18 维 float32，train/val/test 为 240/30/30。
 4. 4×H100 全参 fresh 200-step canary，再 resume 到 250 step；核对显存、有限 loss/gradient 和 checkpoint 完整性。
-5. 只有上述证据全部通过，才启动约 20 小时、24k step 的正式全参训练。
+5. 只有上述证据全部通过，才启动约 20 小时、28k step 的正式全参训练。
 
 当前自动流水线与后续训练入口：
 

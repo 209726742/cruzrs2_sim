@@ -12,6 +12,7 @@ from safetensors import safe_open
 
 
 EXPECTED_STEPS = (200, 250)
+EXPECTED_PARAMETER_COUNT = 4_143_404_816
 REQUIRED_JSON = (
     "pretrained_model/config.json",
     "pretrained_model/policy_preprocessor.json",
@@ -83,6 +84,8 @@ def audit(args):
     policy_expected = {
         "dtype": "bfloat16",
         "gradient_checkpointing": True,
+        "freeze_vision_encoder": False,
+        "use_peft": False,
         "train_expert_only": False,
         "optimizer_lr": 2.5e-5,
     }
@@ -104,6 +107,21 @@ def audit(args):
         errors.append("training log has no loss/gradient measurements")
     elif not all(math.isfinite(value) for value in losses + gradients):
         errors.append("training log contains non-finite loss or gradient")
+    learnable_counts = [
+        int(value)
+        for value in re.findall(r"num_learnable_params=(\d+)", text)
+    ]
+    total_counts = [
+        int(value)
+        for value in re.findall(r"num_total_params=(\d+)", text)
+    ]
+    expected_counts = [EXPECTED_PARAMETER_COUNT, EXPECTED_PARAMETER_COUNT]
+    full_parameter_count_verified = (
+        learnable_counts[-2:] == expected_counts
+        and total_counts[-2:] == expected_counts
+    )
+    if not full_parameter_count_verified:
+        errors.append("fresh/resume runs did not train every policy parameter")
 
     timing_matches = re.findall(
         r"INFO (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*?step:(\d+)",
@@ -133,6 +151,10 @@ def audit(args):
         "fresh_target_step": 200,
         "resume_target_step": 250,
         "fresh_and_resume_exit_zero": exit_codes[-2:] == [0, 0],
+        "expected_parameter_count": EXPECTED_PARAMETER_COUNT,
+        "learnable_parameter_counts": learnable_counts[-2:],
+        "total_parameter_counts": total_counts[-2:],
+        "full_parameter_count_verified": full_parameter_count_verified,
         "train_expert_only": policy.get("train_expert_only"),
         "batch_size_per_gpu": config.get("batch_size"),
         "effective_batch_size": 4 * int(config.get("batch_size", 0)),
@@ -140,7 +162,7 @@ def audit(args):
         "loss_measurements": len(losses),
         "gradient_measurements": len(gradients),
         "mean_seconds_per_step_without_checkpoint": mean_seconds_per_step,
-        "historical_20h_target_steps": 24000,
+        "historical_20h_target_steps": 28000,
         "errors": errors,
         "passed": not errors,
     }

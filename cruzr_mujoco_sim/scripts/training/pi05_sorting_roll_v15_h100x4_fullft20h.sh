@@ -18,14 +18,14 @@ REPO_ID=local/$CAMPAIGN
 CANARY_OUTPUT=$SIM_ROOT/out/training/pi05_sorting_roll_v15_h100x4_fullft_canary_seed1000
 CANARY_LOG=$PROJECT_ROOT/log/pi05_sorting_roll_v15_h100x4_fullft_canary_seed1000.log
 CANARY_AUDIT=$PROJECT_ROOT/log/$CAMPAIGN/pi05_h100x4_fullft_canary_audit.json
-FORMAL_OUTPUT=${FORMAL_OUTPUT:-$SIM_ROOT/out/training/pi05_sorting_roll_v15_h100x4_fullft24k_seed1000}
-FORMAL_LOG=${FORMAL_LOG:-$PROJECT_ROOT/log/pi05_sorting_roll_v15_h100x4_fullft24k_seed1000.log}
+FORMAL_OUTPUT=${FORMAL_OUTPUT:-$SIM_ROOT/out/training/pi05_sorting_roll_v15_h100x4_fullft28k_seed1000}
+FORMAL_LOG=${FORMAL_LOG:-$PROJECT_ROOT/log/pi05_sorting_roll_v15_h100x4_fullft28k_seed1000.log}
 
 GPU_IDS=0,1,2,3
 NUM_PROCESSES=4
 BATCH_SIZE=${BATCH_SIZE:-16}
 NUM_WORKERS=${NUM_WORKERS:-8}
-TARGET_STEPS=${TARGET_STEPS:-24000}
+TARGET_STEPS=${TARGET_STEPS:-28000}
 SAVE_FREQ=${SAVE_FREQ:-1000}
 LOG_FREQ=${LOG_FREQ:-10}
 LEARNING_RATE=${LEARNING_RATE:-2.5e-5}
@@ -177,7 +177,7 @@ canary_args() {
 formal_args() {
   set_train_args \
     "$FORMAL_OUTPUT" "$FORMAL_LOG" \
-    pi05_sorting_roll_v15_h100x4_fullft24k \
+    pi05_sorting_roll_v15_h100x4_fullft28k \
     "$TARGET_STEPS" "$WARMUP_STEPS" "$TARGET_STEPS" "$SAVE_FREQ" 29536
 }
 
@@ -190,6 +190,7 @@ import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert report["passed"] is True and report["errors"] == []
 assert report["fresh_and_resume_exit_zero"] is True
+assert report["full_parameter_count_verified"] is True
 assert report["train_expert_only"] is False
 assert report["effective_batch_size"] == 64
 print("full-parameter canary gate passed")
@@ -256,11 +257,11 @@ import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert report["passed"] is True
 seconds = report.get("mean_seconds_per_step_without_checkpoint")
-print("Recommended formal target: 24000 steps")
-print("Historical 4xH100 full-parameter throughput: about 1200 steps/hour")
+print("Recommended formal target: 28000 steps")
+print("Historical 4xH100 end-to-end throughput: about 1380 steps/hour")
 if seconds:
     print(f"Current canary compute/data mean: {seconds:.3f} s/step (checkpoint time excluded)")
-print("Expected wall time: approximately 20 hours; use TARGET_STEPS to override after canary.")
+print("Historical complete 28k checkpoint wall time: about 20h14m; override TARGET_STEPS only after canary.")
 PY
     ;;
   dry-run)
@@ -284,16 +285,16 @@ PY
     exec bash "$BASE_LAUNCHER" resume "${TRAIN_ARGS[@]}"
     ;;
   tmux-start)
-    launch_tmux sorting_roll_v15_h100x4_fullft24k start "$FORMAL_LOG"
+    launch_tmux sorting_roll_v15_h100x4_fullft28k start "$FORMAL_LOG"
     ;;
   tmux-resume)
-    launch_tmux sorting_roll_v15_h100x4_fullft24k_resume resume "$FORMAL_LOG"
+    launch_tmux sorting_roll_v15_h100x4_fullft28k_resume resume "$FORMAL_LOG"
     ;;
   status)
     formal_args
     bash "$BASE_LAUNCHER" status \
       --output-dir "$FORMAL_OUTPUT" \
-      --job-name pi05_sorting_roll_v15_h100x4_fullft24k \
+      --job-name pi05_sorting_roll_v15_h100x4_fullft28k \
       --log-file "$FORMAL_LOG" \
       --isaac-python "$ISAAC_PY"
     tmux list-sessions 2>/dev/null || true

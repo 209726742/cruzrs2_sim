@@ -33,7 +33,7 @@ class Pi05SortingRollV15H100x4Fullft20hTest(unittest.TestCase):
         for setting in (
             "BATCH_SIZE=${BATCH_SIZE:-16}",
             "NUM_WORKERS=${NUM_WORKERS:-8}",
-            "TARGET_STEPS=${TARGET_STEPS:-24000}",
+            "TARGET_STEPS=${TARGET_STEPS:-28000}",
             "SAVE_FREQ=${SAVE_FREQ:-1000}",
             "LEARNING_RATE=${LEARNING_RATE:-2.5e-5}",
             "WARMUP_STEPS=${WARMUP_STEPS:-1000}",
@@ -41,6 +41,7 @@ class Pi05SortingRollV15H100x4Fullft20hTest(unittest.TestCase):
             "--dtype bfloat16",
             "--gradient-checkpointing true",
             "--train-expert-only false",
+            "pi05_sorting_roll_v15_h100x4_fullft28k",
         ):
             self.assertIn(setting, self.source)
 
@@ -53,7 +54,10 @@ class Pi05SortingRollV15H100x4Fullft20hTest(unittest.TestCase):
         self.assertIn("canary_args 250 50", self.source)
         self.assertIn("formal_preflight", self.source)
         self.assertIn("EXPECTED_STEPS = (200, 250)", self.audit_source)
+        self.assertIn("EXPECTED_PARAMETER_COUNT = 4_143_404_816", self.audit_source)
+        self.assertIn('"freeze_vision_encoder": False', self.audit_source)
         self.assertIn('"train_expert_only": False', self.audit_source)
+        self.assertIn('report["full_parameter_count_verified"] is True', self.source)
 
     def test_tmux_and_resume_entrypoints_are_available(self):
         for action in (
