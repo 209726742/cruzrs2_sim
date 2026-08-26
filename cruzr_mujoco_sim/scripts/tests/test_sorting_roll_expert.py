@@ -215,7 +215,7 @@ class SortingRollExpertTest(unittest.TestCase):
 
     def test_release_geometry_enters_before_lowering_and_lifts_to_exit(self):
         self.assertAlmostEqual(ARM_RETRACT_M, 0.082)
-        self.assertAlmostEqual(SHELF_STAGE_OFFSET_X, -0.050)
+        self.assertAlmostEqual(SHELF_STAGE_OFFSET_X, -0.060)
         self.assertAlmostEqual(RELEASE_CLEARANCE_ROLL_Z, 0.958)
         self.assertAlmostEqual(RELEASE_GUARDED_DROP_Z_M, 0.9505)
         self.assertAlmostEqual(RELEASE_APPROACH_Y_BIAS_M, 0.0)
