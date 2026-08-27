@@ -35,7 +35,7 @@ from tqdm import tqdm
 from src.lerobot.configs import parser
 from src.lerobot.configs.train import TrainPipelineConfig
 from src.lerobot.datasets.factory import make_dataset
-from src.lerobot.datasets.sampler import EpisodeAwareSampler
+from src.lerobot.datasets.sampler import EpisodeAwareSampler, load_frame_sampling_weights
 from src.lerobot.datasets.utils import cycle
 from src.lerobot.envs.factory import make_env, make_env_pre_post_processors
 from src.lerobot.envs.utils import close_envs
@@ -110,7 +110,7 @@ def update_policy(
         # Use per-sample loss when RA-BC is enabled for proper weighting
         if rabc_batch_weights is not None:
             # Get per-sample losses
-            per_sample_loss, output_dict = policy.forward(batch, reduction="none")
+            per_sample_loss, output_dict = policy(batch, reduction="none")
 
             # Apply RA-BC weights: L_RA-BC = Σ(w_i * l_i) / (Σw_i + ε)
             # rabc_batch_weights is already normalized to sum to batch_size
@@ -121,7 +121,7 @@ def update_policy(
             output_dict["rabc_num_zero_weight"] = rabc_batch_stats["num_zero_weight"]
             output_dict["rabc_num_full_weight"] = rabc_batch_stats["num_full_weight"]
         else:
-            loss, output_dict = policy.forward(batch)
+            loss, output_dict = policy(batch)
 
         # TODO(rcadene): policy.unnormalize_outputs(out_dict)
 
@@ -295,22 +295,23 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if cfg.policy.pretrained_path is not None:
         processor_kwargs["preprocessor_overrides"] = {
             "device_processor": {"device": device.type},
-            "normalizer_processor": {
-                "stats": truncated_stats,
-                "features": {**policy.config.input_features, **policy.config.output_features},
-                "norm_map": policy.config.normalization_mapping,
-            },
         }
         processor_kwargs["preprocessor_overrides"]["rename_observations_processor"] = {
             "rename_map": cfg.rename_map
         }
-        postprocessor_kwargs["postprocessor_overrides"] = {
-            "unnormalizer_processor": {
+        if not cfg.dataset.use_pretrained_stats:
+            processor_kwargs["preprocessor_overrides"]["normalizer_processor"] = {
                 "stats": truncated_stats,
-                "features": policy.config.output_features,
+                "features": {**policy.config.input_features, **policy.config.output_features},
                 "norm_map": policy.config.normalization_mapping,
-            },
-        }
+            }
+            postprocessor_kwargs["postprocessor_overrides"] = {
+                "unnormalizer_processor": {
+                    "stats": truncated_stats,
+                    "features": policy.config.output_features,
+                    "norm_map": policy.config.normalization_mapping,
+                },
+            }
 
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=cfg.policy,
@@ -379,7 +380,27 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
 
     # create dataloader for offline training
-    if hasattr(cfg.policy, "drop_n_last_frames"):
+    if cfg.dataset.frame_sampling_weights is not None:
+        if cfg.dataset.streaming:
+            raise ValueError("frame sampling weights are not supported for streaming datasets")
+        if hasattr(cfg.policy, "drop_n_last_frames"):
+            raise ValueError("frame sampling weights cannot be combined with drop_n_last_frames")
+        weights = load_frame_sampling_weights(cfg.dataset.frame_sampling_weights, len(dataset))
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights=weights,
+            num_samples=len(weights),
+            replacement=True,
+        )
+        shuffle = False
+        if is_main_process:
+            effective_sample_size = float(weights.sum().square() / weights.square().sum())
+            logging.info(
+                "Using frame sampling weights from %s (effective sample size %.1f / %d)",
+                cfg.dataset.frame_sampling_weights,
+                effective_sample_size,
+                len(weights),
+            )
+    elif hasattr(cfg.policy, "drop_n_last_frames"):
         shuffle = False
         sampler = EpisodeAwareSampler(
             dataset.meta.episodes["dataset_from_index"],

@@ -38,6 +38,10 @@ DATASET_REPO_ID=${DATASET_REPO_ID:-formal/cruzr_shelf_v24_300source}
 # episode 选择器：all、train、val、test、split:<名称>、0:100、0,2,7 或 JSON 列表。
 EPISODES=${EPISODES:-train}
 
+# 增量微调可显式提供逐帧 sampler，并沿用任务 checkpoint 的归一化统计。
+FRAME_SAMPLING_WEIGHTS=${FRAME_SAMPLING_WEIGHTS:-}
+USE_PRETRAINED_STATS=${USE_PRETRAINED_STATS:-false}
+
 # 初始策略可以是基础模型，也可以是某个 checkpoint 下的 pretrained_model 目录。
 BASE_POLICY=${BASE_POLICY:-$PROJECT_ROOT/pretrained/pi05_base_remapped}
 
@@ -124,6 +128,8 @@ usage() {
   --dataset-root PATH       本地 LeRobot v3.0 数据集目录
   --repo-id ID              数据集逻辑名称，例如 local/my_dataset
   --episodes SELECTOR       all/train/val/test/split:name/0:100/0,2,7/[0,2,7]
+  --frame-sampling-weights PATH  与所选训练帧一一对应的 .npy 正权重
+  --use-pretrained-stats true|false  是否沿用 checkpoint 归一化统计
   --base-policy PATH        基础 π0.5 或 pretrained_model 目录
   --output-dir PATH         checkpoint 最终输出目录
   --job-name NAME           训练任务名
@@ -235,6 +241,8 @@ parse_args() {
       --dataset-root) need_value "$@"; DATASET_ROOT=$2; shift 2 ;;
       --repo-id) need_value "$@"; DATASET_REPO_ID=$2; shift 2 ;;
       --episodes) need_value "$@"; EPISODES=$2; shift 2 ;;
+      --frame-sampling-weights) need_value "$@"; FRAME_SAMPLING_WEIGHTS=$2; shift 2 ;;
+      --use-pretrained-stats) need_value "$@"; USE_PRETRAINED_STATS=$2; shift 2 ;;
       --base-policy) need_value "$@"; BASE_POLICY=$2; shift 2 ;;
       --output-dir) need_value "$@"; OUTPUT_DIR=$2; shift 2 ;;
       --job-name) need_value "$@"; JOB_NAME=$2; JOB_NAME_OVERRIDDEN=true; shift 2 ;;
@@ -279,6 +287,7 @@ parse_args() {
 finalize_config() {
   command -v realpath >/dev/null || die "系统缺少 realpath"
   DATASET_ROOT=$(realpath -m "$DATASET_ROOT")
+  [[ -z $FRAME_SAMPLING_WEIGHTS ]] || FRAME_SAMPLING_WEIGHTS=$(realpath -m "$FRAME_SAMPLING_WEIGHTS")
   BASE_POLICY=$(realpath -m "$BASE_POLICY")
   OUTPUT_DIR=$(realpath -m "$OUTPUT_DIR")
   ISAAC_PY=$(realpath -m "$ISAAC_PY")
@@ -300,6 +309,7 @@ finalize_config() {
   ALLOW_SMALL_BATCH=$(normalize_bool ALLOW_SMALL_BATCH "$ALLOW_SMALL_BATCH")
   IMAGE_TRANSFORMS=$(normalize_bool IMAGE_TRANSFORMS "$IMAGE_TRANSFORMS")
   USE_IMAGENET_STATS=$(normalize_bool USE_IMAGENET_STATS "$USE_IMAGENET_STATS")
+  USE_PRETRAINED_STATS=$(normalize_bool USE_PRETRAINED_STATS "$USE_PRETRAINED_STATS")
   WANDB_ENABLE=$(normalize_bool WANDB_ENABLE "$WANDB_ENABLE")
   OFFLINE=$(normalize_bool OFFLINE "$OFFLINE")
 }
@@ -394,6 +404,8 @@ validate_start_paths() {
   [[ -d $DATASET_ROOT ]] || die "数据集目录不存在：$DATASET_ROOT"
   [[ -f $DATASET_ROOT/meta/info.json ]] || die "缺少 meta/info.json：$DATASET_ROOT"
   [[ -f $DATASET_ROOT/meta/stats.json ]] || die "缺少 meta/stats.json：$DATASET_ROOT"
+  [[ -z $FRAME_SAMPLING_WEIGHTS || -f $FRAME_SAMPLING_WEIGHTS ]] ||
+    die "逐帧采样权重不存在：$FRAME_SAMPLING_WEIGHTS"
   [[ -d $BASE_POLICY ]] || die "基础策略目录不存在：$BASE_POLICY"
   [[ -f $BASE_POLICY/config.json ]] || die "基础策略缺少 config.json：$BASE_POLICY"
   [[ -f $BASE_POLICY/model.safetensors ]] || die "基础策略缺少 model.safetensors：$BASE_POLICY"
@@ -600,10 +612,13 @@ build_fresh_command() {
     --dataset.root="$DATASET_ROOT"
   )
   [[ -z $EPISODES_JSON ]] || TRAIN_COMMAND+=(--dataset.episodes="$EPISODES_JSON")
+  [[ -z $FRAME_SAMPLING_WEIGHTS ]] ||
+    TRAIN_COMMAND+=(--dataset.frame_sampling_weights="$FRAME_SAMPLING_WEIGHTS")
   TRAIN_COMMAND+=(
     --dataset.video_backend="$VIDEO_BACKEND"
     --dataset.image_transforms.enable="$IMAGE_TRANSFORMS"
     --dataset.use_imagenet_stats="$USE_IMAGENET_STATS"
+    --dataset.use_pretrained_stats="$USE_PRETRAINED_STATS"
     --policy.path="$BASE_POLICY"
     --policy.device=cuda
     --policy.dtype="$DTYPE"
@@ -744,6 +759,8 @@ print_summary() {
 数据集            : $DATASET_ROOT
 repo_id           : $DATASET_REPO_ID
 episode           : $DATASET_DESCRIPTION
+逐帧采样权重      : ${FRAME_SAMPLING_WEIGHTS:-无}
+沿用预训练统计    : $USE_PRETRAINED_STATS
 基础策略          : $BASE_POLICY
 输出目录          : $OUTPUT_DIR
 日志              : $LOG_FILE
@@ -780,7 +797,7 @@ launch_detached() {
   } >> "$LOG_FILE"
 
   RUN_ENV=(
-    "PYTHONPATH=$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+    "PYTHONPATH=$PROJECT_ROOT/src:$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
     TORCH_NCCL_ASYNC_ERROR_HANDLING=1
   )
   if [[ $OFFLINE == true ]]; then

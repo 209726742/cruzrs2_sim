@@ -14,8 +14,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from collections.abc import Iterator
+from pathlib import Path
 
+import numpy as np
 import torch
+
+
+def load_frame_sampling_weights(
+    path: str | Path, expected_length: int
+) -> torch.Tensor:
+    """Load and validate one positive sampling weight per selected dataset frame."""
+    weights = np.load(Path(path), allow_pickle=False)
+    if weights.ndim != 1:
+        raise ValueError(f"frame sampling weights must be one-dimensional, got shape={weights.shape}")
+    if len(weights) != expected_length:
+        raise ValueError(
+            f"frame sampling weights length {len(weights)} does not match dataset length {expected_length}"
+        )
+    tensor = torch.as_tensor(weights, dtype=torch.float64)
+    if not torch.isfinite(tensor).all():
+        raise ValueError("frame sampling weights must be finite")
+    if not torch.all(tensor > 0):
+        raise ValueError("frame sampling weights must be strictly positive")
+    return tensor
 
 
 class EpisodeAwareSampler:

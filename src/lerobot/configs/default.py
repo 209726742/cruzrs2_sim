@@ -35,6 +35,10 @@ class DatasetConfig:
     use_imagenet_stats: bool = True
     video_backend: str = field(default_factory=get_safe_default_codec)
     streaming: bool = False
+    # Optional per-frame weights aligned with the selected dataset frames.
+    frame_sampling_weights: str | None = None
+    # Keep normalization saved with a task checkpoint during same-task incremental fine-tuning.
+    use_pretrained_stats: bool = False
 
 
 @dataclass

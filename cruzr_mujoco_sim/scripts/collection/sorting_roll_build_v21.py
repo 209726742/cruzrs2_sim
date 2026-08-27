@@ -160,7 +160,9 @@ def validate_video(path, expected_frames):
         raise ValueError(f"{path}: video PTS is not a uniform {FPS} FPS grid")
 
 
-def encode_episode_videos(source, out, episode_index, num_frames, workers):
+def encode_episode_videos(
+    source, out, episode_index, num_frames, workers, reuse_video_paths=None
+):
     jobs = []
     for camera in POLICY_CAMERAS:
         output = (
@@ -170,11 +172,23 @@ def encode_episode_videos(source, out, episode_index, num_frames, workers):
             / f"observation.images.{camera}"
             / f"episode_{episode_index:06d}.mp4"
         )
-        jobs.append((source / "frames" / camera, output))
+        reuse = (
+            None
+            if reuse_video_paths is None
+            else Path(reuse_video_paths[camera])
+        )
+        jobs.append((source / "frames" / camera, output, reuse))
 
     def run(job):
-        frame_dir, output = job
-        encode_video(frame_dir, output)
+        frame_dir, output, reuse = job
+        if reuse is None:
+            encode_video(frame_dir, output)
+        else:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                output.hardlink_to(reuse)
+            except OSError:
+                shutil.copy2(reuse, output)
         validate_video(output, num_frames)
 
     if workers == 1:
@@ -273,17 +287,39 @@ def build_dataset(sources, out, encode_workers):
     task_index_by_prompt = {
         prompt: index for index, prompt in enumerate(prompts)
     }
-    source_task_version = sources[0]["task_version"]
-    collection_profile = sources[0]["collection_profile"]
-    source_campaign = (
-        sources[0]["diversity"]["assignment"]["campaign"]
-        if source_task_version == DIVERSE_TASK_VERSION else None
+    source_task_versions = sorted({
+        source["task_version"] for source in sources
+    })
+    source_task_version = (
+        source_task_versions[0]
+        if len(source_task_versions) == 1
+        else "mixed"
     )
+    collection_profiles = sorted({
+        source["collection_profile"] for source in sources
+    })
+    if len(collection_profiles) != 1:
+        raise ValueError("source collection profiles cannot be mixed")
+    collection_profile = collection_profiles[0]
+    source_campaigns = sorted({
+        source.get("campaign")
+        or (
+            ((source.get("diversity") or {}).get("assignment") or {})
+            .get("campaign")
+        )
+        for source in sources
+    } - {None})
+    source_campaign = source_campaigns[0] if len(source_campaigns) == 1 else None
+    legacy_diversity_assignments = [
+        source["diversity"]["assignment"]
+        for source in sources
+        if source["task_version"] == DIVERSE_TASK_VERSION
+        and isinstance(source.get("diversity"), dict)
+    ]
     source_diversity_counts = (
-        manifest_counts([
-            source["diversity"]["assignment"] for source in sources
-        ])
-        if source_task_version == DIVERSE_TASK_VERSION else {}
+        manifest_counts(legacy_diversity_assignments)
+        if source_task_versions == [DIVERSE_TASK_VERSION]
+        else {}
     )
 
     try:
@@ -338,6 +374,7 @@ def build_dataset(sources, out, encode_workers):
                 episode_index,
                 num_frames,
                 encode_workers,
+                source.get("reuse_video_paths"),
             )
             episode_lines.append(json.dumps({
                 "episode_index": episode_index,
@@ -348,6 +385,7 @@ def build_dataset(sources, out, encode_workers):
                 "source_task_version": source["task_version"],
                 "source_collection_profile": source["collection_profile"],
                 "source_diversity": source.get("diversity"),
+                "source_scenario": source.get("scenario"),
             }))
             episode_stats = {
                 "observation.state": channel_stats(state),
@@ -371,6 +409,7 @@ def build_dataset(sources, out, encode_workers):
                 "source_collection_profile": source["collection_profile"],
                 "prompt": prompt,
                 "diversity": source.get("diversity"),
+                "scenario": source.get("scenario"),
             }))
             global_index += num_frames
             print(
@@ -426,7 +465,9 @@ def build_dataset(sources, out, encode_workers):
         "codebase_version": "v2.1",
         "robot_type": "cruzr_s2",
         "source_task_version": source_task_version,
+        "source_task_versions": source_task_versions,
         "source_campaign": source_campaign,
+        "source_campaigns": source_campaigns,
         "collection_profile": collection_profile,
         "source_diversity_counts": source_diversity_counts,
         "policy_image_map": POLICY_IMAGE_MAP,
