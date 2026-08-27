@@ -44,6 +44,8 @@ usage() {
     '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh dry-run' \
     '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-start' \
     '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-resume' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh extend42k-dry-run' \
+    '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh tmux-extend42k' \
     '  bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh status'
 }
 
@@ -289,6 +291,25 @@ PY
     ;;
   tmux-resume)
     launch_tmux sorting_roll_v15_h100x4_fullft28k_resume resume "$FORMAL_LOG"
+    ;;
+  extend42k-dry-run)
+    hardware_preflight
+    data_preflight
+    formal_preflight
+    TARGET_STEPS=42000
+    formal_args
+    exec bash "$BASE_LAUNCHER" dry-run-resume "${TRAIN_ARGS[@]}"
+    ;;
+  extend42k)
+    hardware_preflight
+    data_preflight
+    formal_preflight
+    TARGET_STEPS=42000
+    formal_args
+    exec bash "$BASE_LAUNCHER" resume "${TRAIN_ARGS[@]}"
+    ;;
+  tmux-extend42k)
+    launch_tmux sorting_roll_v15_h100x4_fullft42k_resume extend42k "$FORMAL_LOG"
     ;;
   status)
     formal_args

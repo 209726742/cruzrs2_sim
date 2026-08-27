@@ -67,8 +67,19 @@ class Pi05SortingRollV15H100x4Fullft20hTest(unittest.TestCase):
             "tmux-canary-resume",
             "tmux-start",
             "tmux-resume",
+            "extend42k-dry-run",
+            "tmux-extend42k",
         ):
             self.assertIn(action, self.source)
+
+    def test_42k_extension_resumes_without_restarting_training(self):
+        self.assertIn("TARGET_STEPS=42000", self.source)
+        self.assertIn('exec bash "$BASE_LAUNCHER" dry-run-resume', self.source)
+        self.assertIn('exec bash "$BASE_LAUNCHER" resume', self.source)
+        self.assertIn(
+            "sorting_roll_v15_h100x4_fullft42k_resume",
+            self.source,
+        )
 
     def test_auto_pipeline_is_tmux_backed_and_hard_gated(self):
         subprocess.run(["bash", "-n", str(AUTO_LAUNCHER)], check=True)
