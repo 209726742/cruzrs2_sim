@@ -1,8 +1,8 @@
 # Sorting Roll 正式数据采集与 π0.5 训练指南
 
-> 状态：2026-08-27。v15 数据流水线已完成并通过准入。暂存点后移 10 mm 后，最终 5×20 fresh 准入分别为 19/20、20/20、18/20、20/20、20/20，所有组均达到至少 18/20；正式首轮采集 293/300 成功，7 个同配额补采全部成功，最终选择 300 个唯一成功回合。源 validator 为 300/300，LeRobot v3.0 审计为 `passed=true`、`errors=[]`。4×H100 全参数 fresh/resume canary 已通过，28,000-step 训练已正常完成，当前正从完整 `028000` checkpoint 低学习率续训到 42,000 step。
+> 状态：2026-08-27。v15 数据流水线已完成并通过准入。暂存点后移 10 mm 后，最终 5×20 fresh 准入分别为 19/20、20/20、18/20、20/20、20/20，所有组均达到至少 18/20；正式首轮采集 293/300 成功，7 个同配额补采全部成功，最终选择 300 个唯一成功回合。源 validator 为 300/300，LeRobot v3.0 审计为 `passed=true`、`errors=[]`。4×H100 全参数 fresh/resume canary 已通过，28,000-step 训练已正常完成；42k 延长在 step 41,146 附近按用户要求停止，最近完整 checkpoint 为 `041000`。
 
-> 4×H100 执行状态：28k 以退出码 0 完成，最终 `loss=0.002`、`grad_norm=0.053`、`lr=2.5e-6`，训练循环用时约 12 小时 16 分。42k 续训由 tmux `sorting_roll_v15_h100x4_fullft42k_resume` 启动；首个新日志点对应 step 28,010，`loss=0.001`、`grad_norm=0.046`，可训练参数与总参数均为 4,143,404,816，四卡显存约 51.1 GB，未见 OOM、NaN 或 Inf。
+> 4×H100 执行状态：训练已停止，tmux 与训练进程均已退出，四卡显存已释放。`041000` 包含完整的模型、优化器、scheduler 和 RNG 状态；未生成 `042000`，41,000 之后未保存的约 146 步不作为可恢复证据。
 
 v15 从“安装在左右手局部坐标系中的同一 D405 变换”重新推导初始姿态：双臂直接初始化在前向、左右镜像且可观察自身夹爪的任务就绪位，不再执行原来前 25 秒的抬臂绕行。高风险 heavy/low-friction seed 10084 在 50.517 秒内成功，早期 806 次碰撞检查无事件；validator 1/1 通过，相机总覆盖和必需角色覆盖均为 100%，平均每个关键样本有 2.78 路可用视角。棒子最终由一体式顶层槽提供四点接触，松手后稳定 2 秒且双手撤回。
 
@@ -68,7 +68,7 @@ bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_fullft20h.sh
 bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v15_h100x4_auto20h.sh resume-formal
 ```
 
-`data_training_readiness.json` 和 `log/sorting_roll_v15_diverse300_20260826_8x4090/pi05_h100x4_fullft_canary_audit.json` 均已通过，42k 续训正在运行。完成后必须使用相同 val/test seed 对比 28k、35k 和 42k 闭环成功率；训练 loss 更低不能单独证明策略更好。本文后续出现的 v13/v10 路径、expert-only checkpoint 和采集模板均为历史流程说明，禁止作为当前启动命令。
+`data_training_readiness.json` 和 `log/sorting_roll_v15_diverse300_20260826_8x4090/pi05_h100x4_fullft_canary_audit.json` 均已通过，当前没有训练任务运行。下一步应使用相同 val/test seed 对比 28k、35k 和 41k 闭环成功率；训练 loss 更低不能单独证明策略更好。本文后续出现的 v13/v10 路径、expert-only checkpoint 和采集模板均为历史流程说明，禁止作为当前启动命令。
 
 ## 1. 已定版的基线与版本边界
 
