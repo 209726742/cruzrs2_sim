@@ -130,7 +130,11 @@ def main():
     random.seed(args.default_policy_seed)
     np.random.seed(args.default_policy_seed)
     torch.manual_seed(args.default_policy_seed)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        force=True,
+    )
 
     adapter = OfficialPI05Adapter(args.checkpoint, args.device)
     packer = msgpack_numpy.Packer()

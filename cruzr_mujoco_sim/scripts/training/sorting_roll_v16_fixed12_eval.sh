@@ -51,7 +51,7 @@ generate_manifest() {
 
 wait_for_server() {
   local pid=$1 log=$2
-  for _ in $(seq 1 240); do
+  for _ in $(seq 1 900); do
     grep -q "serving official" "$log" 2>/dev/null && return
     kill -0 "$pid" 2>/dev/null || {
       tail -n 80 "$log" >&2
@@ -127,6 +127,7 @@ run_all() {
       CUDA_VISIBLE_DEVICES="$gpu" \
       PYTHONPATH="$PROJECT_ROOT/src:$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
       HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+      PYTHONUNBUFFERED=1 \
       "$ISAAC_PY" "$SERVER" \
       --checkpoint "$checkpoint" --device cuda:0 --port "$port" \
       --cuda-memory-fraction 0.5 --default-policy-seed "$POLICY_SEED" \

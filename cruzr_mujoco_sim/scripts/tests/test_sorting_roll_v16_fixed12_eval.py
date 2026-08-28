@@ -27,6 +27,8 @@ class SortingRollV16Fixed12EvalTests(unittest.TestCase):
         self.assertEqual(text.count("v16:60"), 9)
         self.assertIn("sorting_roll_v16_fixed12_audit.py", text)
         self.assertIn("tmux new-session -d", text)
+        self.assertIn("seq 1 900", text)
+        self.assertIn("PYTHONUNBUFFERED=1", text)
 
     def test_rollout_uses_d405_contract_and_physical_stage_metrics(self):
         text = ROLLOUT.read_text(encoding="utf-8")
@@ -47,6 +49,7 @@ class SortingRollV16Fixed12EvalTests(unittest.TestCase):
         self.assertIn("PI05Policy.predict_action_chunk", text)
         self.assertIn("--default-policy-seed", text)
 
+        self.assertIn("force=True", text)
 
 if __name__ == "__main__":
     unittest.main()
