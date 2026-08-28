@@ -1,20 +1,23 @@
 # π0.5 棒状物搬运任务：第一性原理数据扩充方案
 
-> 状态：执行中；固定 12 场景评测已完成，pilot 方向有效但绝对门槛未过，暂停扩量并诊断稳定抬升
+> 状态：执行中；v2 完整轨迹 16/16 通过，混合数据集审计与 5-step 预检通过，正在运行 3k canary
 > 日期：2026-08-28
 > 适用范围：当前 CRUZR MuJoCo `sorting_roll_v15` 三相机、18 维状态/动作、30 Hz 的 π0.5 行为克隆任务
 
 ## 当前执行状态
 
-- 已完成 16/16 条 pilot：H=4、T=4、R=8；源数据、v2.1/v3.0 数据集和审计均通过。
-- 当前训练候选为 256 条混合数据，训练 split 共 252 条；按帧采样目标为旧数据/H/T/R=`50/15/15/20`，不按 episode 数假设比例。
-- 36k 只作为相同权重起点，不恢复旧 optimizer、scheduler 或旧 dataloader；继续沿用旧训练集 normalization stats，避免把统计变化混入数据扩充效果。
-- 4×4090 分成两个同步的 2 卡 DDP：旧数据对照组使用 GPU 0–1，扩充数据处理组使用 GPU 2–3；两组 seed、学习率、步数和 batch 完全一致。
-- 已验证每卡 batch=8、有效 batch=16：峰值约 19.3/24.6 GB，训练计算阶段四卡均可达到 100% 利用率。首轮只训练 expert 3k step，用于筛选数据方向，不代替后续 H100 全参数正式训练。
-- control/treatment 匹配 canary 均完成 3k step，最终模型和可恢复训练状态完整；固定闭环评测完成 36/36。
-- original36/control3k/treatment3k 的严格双手抓持分别为 7/12、8/12、11/12，稳定抬升分别为 0/12、0/12、1/12，危险碰撞分别为 1、3、0；扩充组相对对照改善，但最终成功仍为 0/12，`ready_to_expand=false`。
-- 当前不扩到 80 条；先用关键帧 teacher-forced 与闭环轨迹定位双手接触后的夹持—抬升动作前缀、异常峰值夹持力和状态漂移，再以同一固定套件重新准入。
-- 退出条件：处理组必须在同一固定闭环套件中优于匹配对照组；若只改善 teacher-forced 指标而闭环不改善，则停止扩充同类数据，重新检查可观测性、低层控制与状态漂移。
+- 旧 v1 pilot 的 16/16 源数据和格式审计虽通过，但 T/R 是使用完整任务指令的中途终止轨迹；该数据集不再作为扩量依据。
+- 匹配 3k canary 的固定 12 场景结果为：original/control/treatment 严格双手抓持 7/8/11，稳定抬升 0/0/1，端到端成功均为 0，故旧 treatment 未通过绝对门槛。
+- teacher-forced 证实旧 treatment 在抬升起点的双臂 20 步 MAE 为 0.089/0.111 rad、方向余弦 0.607；original/control 仅约 0.006–0.008 rad、方向余弦 0.998。
+- 退化从 500 step 已出现，不是训练过久：旧 T 中 63.9% 是接近桌面、抬升仅 11.1%；旧 R 中 55.3% 是 `clear_table`，且 π0.5 未屏蔽末端 padding。
+- v2 契约要求 H/T/R 从各自起点录制后继续到 `terminal_success_hold`，不再以抬升或离桌作为完整任务终点。
+- v2 完整 pilot 已 16/16 成功、0 失败，H/T/R=4/4/8；全部录制到 `terminal_success_hold`，1092–1560 帧、50.6–54.6 秒。
+- 新混合 LeRobot v3.0 数据集有 256 回合、387,376 帧，train/val/test=252/2/2；三路 RGB 均为 224×224@30 FPS，state/action 均为 18 维 float32，24 个抽样视频片段可解码，数据审计 `passed=true`。
+- canary 使用保守逐帧采样 old/H/T/R=70/10/10/10；采样权重精确达到目标质量，数据 readiness 为 `true`。
+- 完整回归测试 250/250 通过；2×4090 的 5-step 实际训练预检完成，退出码为 0。
+- 当前 tmux `sorting_roll_v16_full_v2_treatment_expert3k` 正从 36k 权重起点运行 3,000 步 treatment canary；不恢复旧 optimizer、scheduler 或 dataloader，保留旧 normalization stats。
+- canary 后仍必须通过 teacher-forced 抬升诊断和同一 fixed12 闭环绝对门槛；未通过前不得扩到 80/160 回合或重新开始正式训练。
+- 退出条件不变：修正版 treatment 必须在同一固定闭环套件中优于匹配对照且通过绝对门槛，否则停止该类扩充并重新检查监督设计。
 
 ## 0. 结论先行
 

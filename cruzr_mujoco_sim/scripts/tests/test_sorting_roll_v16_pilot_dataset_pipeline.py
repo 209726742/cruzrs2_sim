@@ -19,6 +19,11 @@ class SortingRollV16PilotDatasetPipelineTests(unittest.TestCase):
         self.assertIn("sorting_roll_v16_dataset_audit.py", text)
         self.assertIn("sorting_roll_v16_sampling_weights.py", text)
         self.assertIn("ready_for_full_parameter_canary", text)
+        self.assertIn("SORTING_ROLL_V16_CAMPAIGN", text)
+        self.assertIn("SORTING_ROLL_V16_SOURCE_CAMPAIGN", text)
+        self.assertIn("SORTING_ROLL_V16_TASK_VERSION", text)
+        self.assertIn("SORTING_ROLL_V16_SAMPLING_PROFILE", text)
+        self.assertIn("full_v2_old70", text)
         self.assertIn('audit.get("passed") is True', text)
         self.assertIn('sampling.get("passed") is True', text)
 

@@ -64,10 +64,12 @@ def select_probe_frames(phases, state, action):
     if len(established) == 0:
         raise ValueError("grasp phase never establishes two closed grippers")
 
+    table_phase = (
+        "localize_roll_with_head_stereo" if np.any(phases == "localize_roll_with_head_stereo")
+        else "approach_table_with_arms_staged"
+    )
     frames = {
-        "table_observation": first_phase_index(
-            phases, "localize_roll_with_head_stereo"
-        ),
+        "table_observation": first_phase_index(phases, table_phase),
         "pregrasp": first_phase_index(
             phases, "coordinated_flat_pick_pregrasp_after_stereo_localization"
         ),
@@ -78,8 +80,8 @@ def select_probe_frames(phases, state, action):
             phases, "lift_flat_from_pickup_support"
         ),
     }
-    if min(frames.values()) < 0 or max(frames.values()) + max(HORIZONS) > len(action):
-        raise ValueError("probe frames do not have a complete 50-action future")
+    if min(frames.values()) < 0 or max(frames.values()) >= len(action):
+        raise ValueError("probe frame is outside the episode")
     return frames
 
 
@@ -106,8 +108,10 @@ def chunk_metrics(predicted, expert, current_state):
     predicted = np.asarray(predicted, dtype=np.float32)
     expert = np.asarray(expert, dtype=np.float32)
     current_state = np.asarray(current_state, dtype=np.float32)
-    if predicted.shape != (50, 18) or expert.shape != (50, 18):
-        raise ValueError("predicted and expert chunks must have shape (50, 18)")
+    if predicted.shape != (50, 18):
+        raise ValueError("predicted chunk must have shape (50, 18)")
+    if expert.ndim != 2 or expert.shape[1] != 18 or not 1 <= len(expert) <= 50:
+        raise ValueError("expert chunk must have shape (1..50, 18)")
     if current_state.shape != (18,):
         raise ValueError("current_state must have shape (18,)")
     if not np.isfinite(predicted).all() or not np.isfinite(expert).all():
@@ -115,8 +119,9 @@ def chunk_metrics(predicted, expert, current_state):
 
     horizons = {}
     for horizon in HORIZONS:
-        pred = predicted[:horizon]
-        target = expert[:horizon]
+        evaluated_steps = min(horizon, len(expert))
+        pred = predicted[:evaluated_steps]
+        target = expert[:evaluated_steps]
         groups = {}
         for name, selector in ACTION_GROUPS.items():
             error = pred[:, selector] - target[:, selector]
@@ -130,6 +135,7 @@ def chunk_metrics(predicted, expert, current_state):
             pred[:, 16:18]
         ) == _sign_with_deadband(target[:, 16:18])
         horizons[str(horizon)] = {
+            "evaluated_steps": evaluated_steps,
             "groups": groups,
             "arm_delta_cosine": _cosine(pred_arm_delta, expert_arm_delta),
             "base_sign_agreement": float(np.mean(base_sign)),
@@ -253,7 +259,7 @@ def run(args):
             with torch.inference_mode():
                 processed = preprocessor(make_raw_observation(samples[name]))
                 normalized = policy.predict_action_chunk(processed)
-                predicted = postprocessor(normalized)[0].numpy().astype(np.float32)
+                predicted = postprocessor(normalized)[0].detach().cpu().numpy().astype(np.float32)
             expert = source_action[frame:frame + 50]
             checkpoint_results[name] = {
                 "frame": frame,

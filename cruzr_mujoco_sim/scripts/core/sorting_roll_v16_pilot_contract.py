@@ -21,8 +21,8 @@ from sorting_roll_diversity import (
 )
 
 
-SCHEMA_VERSION = 1
-TASK_VERSION = "sorting_roll_v16_expansion_pilot_sim"
+SCHEMA_VERSION = 2
+TASK_VERSION = "sorting_roll_v16_expansion_pilot_full_sim"
 PILOT_COUNT = 16
 SEED_START = 5000
 SPLIT_COUNTS = {"train": 12, "val": 2, "test": 2}
@@ -105,15 +105,7 @@ def generate_pilot_manifest(campaign, seed_start=SEED_START):
                     else "recovery_start"
                 )
             ),
-            "terminal_phase": (
-                "terminal_success_hold"
-                if family == "H"
-                else (
-                    "lift_flat_from_pickup_support"
-                    if family == "T"
-                    else "clear_table"
-                )
-            ),
+            "terminal_phase": "terminal_success_hold",
             "intervention_type": intervention_type,
             "intervention_frame": -1 if family == "R" else None,
             "recovery_start_frame": 0 if family == "R" else None,

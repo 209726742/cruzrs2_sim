@@ -49,5 +49,12 @@ class SortingRollV16SamplingWeightsTests(unittest.TestCase):
             sampling.build_frame_weights(np.asarray([0]), rows)
 
 
+    def test_full_v2_profile_is_conservative(self):
+        self.assertEqual(
+            sampling.SAMPLING_PROFILES["full_v2_old70"],
+            {"old": 0.70, "H": 0.10, "T": 0.10, "R": 0.10},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

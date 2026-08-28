@@ -29,7 +29,6 @@ from src.lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
 
 V15_TASK_VERSION = "sorting_roll_v15_diverse_sim"
 V16_TASK_VERSION = "sorting_roll_v16_expansion_pilot_sim"
-EXPECTED_TASK_VERSIONS = sorted((V15_TASK_VERSION, V16_TASK_VERSION))
 EXPECTED_SPLITS = {"train": "0:252", "val": "252:254", "test": "254:256"}
 EXPECTED_FAMILIES = {"H": 4, "R": 8, "T": 4}
 SAMPLED_EPISODES = (0, 3, 239, 240, 251, 252, 254, 255)
@@ -52,10 +51,10 @@ def decode_json_extension(value):
     return value
 
 
-def scenario_errors(rows):
+def scenario_errors(rows, v16_task_version=V16_TASK_VERSION):
     errors = []
     v15 = [row for row in rows if row["source_task_version"] == V15_TASK_VERSION]
-    v16 = [row for row in rows if row["source_task_version"] == V16_TASK_VERSION]
+    v16 = [row for row in rows if row["source_task_version"] == v16_task_version]
     if len(v15) != 240 or len(v16) != 16:
         errors.append(f"task-version counts are v15={len(v15)} v16={len(v16)}")
     if any(row.get("source_split") != "train" for row in v15):
@@ -102,7 +101,7 @@ def audit(args):
     expected_info = {
         "codebase_version": "v3.0",
         "source_task_version": "mixed",
-        "source_task_versions": EXPECTED_TASK_VERSIONS,
+        "source_task_versions": sorted((V15_TASK_VERSION, args.v16_task_version)),
         "source_campaign": None,
         "source_campaigns": sorted((args.v15_campaign, args.v16_campaign)),
         "collection_profile": COLLECTION_PROFILE,
@@ -167,7 +166,9 @@ def audit(args):
             errors.append("episode metadata contains another camera profile")
         if any(row.get("tasks") != [prompt_by_episode[index]] for index, row in enumerate(episode_rows)):
             errors.append("episode task text is malformed")
-    scenario_audit_errors, family_counts = scenario_errors(episode_rows)
+    scenario_audit_errors, family_counts = scenario_errors(
+        episode_rows, args.v16_task_version
+    )
     errors.extend(scenario_audit_errors)
 
     parquet_frames = finite_parquet_contract(root, task_by_index, prompt_by_episode)
@@ -265,6 +266,7 @@ def parse_args(argv=None):
     parser.add_argument("--repo-id", required=True)
     parser.add_argument("--v15-campaign", required=True)
     parser.add_argument("--v16-campaign", required=True)
+    parser.add_argument("--v16-task-version", default=V16_TASK_VERSION)
     parser.add_argument("--build-report", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     return parser.parse_args(argv)

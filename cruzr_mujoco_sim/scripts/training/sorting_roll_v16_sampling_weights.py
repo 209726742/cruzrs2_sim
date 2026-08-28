@@ -17,7 +17,12 @@ from src.lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 
 V15_TASK_VERSION = "sorting_roll_v15_diverse_sim"
-TARGET_FRACTIONS = {"old": 0.50, "H": 0.15, "T": 0.15, "R": 0.20}
+SAMPLING_PROFILES = {
+    "pilot_old50": {"old": 0.50, "H": 0.15, "T": 0.15, "R": 0.20},
+    "full_v2_old70": {"old": 0.70, "H": 0.10, "T": 0.10, "R": 0.10},
+}
+DEFAULT_PROFILE = "pilot_old50"
+TARGET_FRACTIONS = SAMPLING_PROFILES[DEFAULT_PROFILE]
 
 
 def load_episode_rows(root: Path) -> list[dict]:
@@ -107,6 +112,11 @@ def main() -> int:
     parser.add_argument("--repo-id", required=True)
     parser.add_argument("--episodes", default="0:252")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--profile",
+        choices=sorted(SAMPLING_PROFILES),
+        default=DEFAULT_PROFILE,
+    )
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
 
@@ -119,9 +129,11 @@ def main() -> int:
         video_backend="pyav",
     )
     frame_episode_indices = np.asarray(dataset.hf_dataset["episode_index"], dtype=np.int64)
+    target_fractions = SAMPLING_PROFILES[args.profile]
     weights, report = build_frame_weights(
         frame_episode_indices,
         load_episode_rows(args.dataset),
+        target_fractions,
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -132,12 +144,13 @@ def main() -> int:
     report.update({
         "dataset": str(args.dataset.resolve()),
         "repo_id": args.repo_id,
+        "sampling_profile": args.profile,
         "episodes": args.episodes,
         "weights_path": str(args.output.resolve()),
         "weights_sha256": hashlib.sha256(args.output.read_bytes()).hexdigest(),
         "passed": all(
             np.isclose(report["expected_sampling_mass"][family], target, atol=1e-12)
-            for family, target in TARGET_FRACTIONS.items()
+            for family, target in target_fractions.items()
         ),
     })
     write_json(args.report, report)

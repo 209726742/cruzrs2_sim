@@ -22,6 +22,10 @@ class SortingRollV16PilotCollectTests(unittest.TestCase):
         self.assertIn("failed immutable result", text)
         self.assertNotIn("rm -", text)
 
+    def test_representative_mode_covers_full_trajectory_families(self):
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("SEEDS=(5000 5003 5005 5010)", text)
+
 
 if __name__ == "__main__":
     unittest.main()

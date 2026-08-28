@@ -39,9 +39,9 @@ FAMILY_PHASES = {
     "H": ("initial_hold", "terminal_success_hold"),
     "T": (
         "approach_table_with_arms_staged",
-        "lift_flat_from_pickup_support",
+        "terminal_success_hold",
     ),
-    "R": ("recovery_", "clear_table"),
+    "R": ("recovery_", "terminal_success_hold"),
 }
 FAMILY_GATES = {
     "H": ("v16_pickup_support_physical_settle",),

@@ -41,6 +41,38 @@ class SortingRollV16TeacherForcedProbeTest(unittest.TestCase):
             "support_cleared": 79,
         })
 
+    def test_stage_episode_uses_approach_fallback_and_short_lift_future(self):
+        phases = np.array(
+            ["approach_table_with_arms_staged"] * 10
+            + ["coordinated_flat_pick_pregrasp_after_stereo_localization"] * 5
+            + ["horizontal_approach_and_grasp"] * 10
+            + ["lift_flat_from_pickup_support"] * 24
+        )
+        state = np.ones((len(phases), 18), dtype=np.float32)
+        action = np.ones((len(phases), 18), dtype=np.float32)
+        action[20:, 14:16] = 0.0
+        state[22:, 14:16] = 0.6
+        self.assertEqual(select_probe_frames(phases, state, action), {
+            "table_observation": 0,
+            "pregrasp": 10,
+            "precontact": 19,
+            "grasp_established": 22,
+            "lift_start": 25,
+            "support_cleared": 48,
+        })
+
+    def test_chunk_metrics_uses_only_available_expert_future(self):
+        predicted = np.zeros((50, 18), dtype=np.float32)
+        expert = np.zeros((24, 18), dtype=np.float32)
+        predicted[24:] = 1.0
+        metrics = chunk_metrics(predicted, expert, np.zeros(18, dtype=np.float32))
+        self.assertEqual(metrics["horizons"]["20"]["evaluated_steps"], 20)
+        self.assertEqual(metrics["horizons"]["30"]["evaluated_steps"], 24)
+        self.assertEqual(metrics["horizons"]["50"]["evaluated_steps"], 24)
+        for horizon in ("20", "30", "50"):
+            for group in metrics["horizons"][horizon]["groups"].values():
+                self.assertEqual(group["mae"], 0.0)
+
     def test_chunk_metrics_reports_exact_match(self):
         expert = np.linspace(0.0, 1.0, 50 * 18, dtype=np.float32).reshape(50, 18)
         metrics = chunk_metrics(expert.copy(), expert, np.zeros(18, dtype=np.float32))

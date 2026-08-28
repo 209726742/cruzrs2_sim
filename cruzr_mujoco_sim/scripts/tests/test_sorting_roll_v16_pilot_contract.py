@@ -39,6 +39,12 @@ class SortingRollV16PilotContractTest(unittest.TestCase):
         self.assertTrue(all(item["intervention_frame"] == -1 for item in recoveries))
         self.assertTrue(all(item["recovery_start_frame"] == 0 for item in recoveries))
 
+    def test_all_families_continue_to_task_success(self):
+        self.assertTrue(all(
+            item["terminal_phase"] == "terminal_success_hold"
+            for item in self.manifest["assignments"]
+        ))
+
     def test_high_risk_stage_scenarios_are_forced(self):
         stages = [
             item for item in self.manifest["assignments"]

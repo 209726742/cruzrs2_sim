@@ -24,7 +24,6 @@ from sorting_roll_v16_pilot_contract import (  # noqa: E402
 )
 
 
-MIN_FOCUSED_FRAMES = 150
 PARTIAL_LIFT_M = 0.020
 SUPPORT_SETTLE_FRAMES = 120
 SUPPORT_STABILITY_WINDOW_FRAMES = 60
@@ -96,9 +95,7 @@ class SortingRollV16PilotExpert(v15.SortingRollExpert):
             "manifest": str(args.manifest.resolve()),
         }
         self.recording_started = False
-        self.recording_stopped = False
         self.recording_start_sim_seconds = None
-        self.recording_terminal_phase = None
         self.recovery_injected = False
         self.intervention_evidence = None
         self.ct.REC["on"] = False
@@ -165,23 +162,6 @@ class SortingRollV16PilotExpert(v15.SortingRollExpert):
         self.ct.REC["metadata"]["recorded_start_phase"] = phase
         self.ct.REC["on"] = True
 
-    def stop_recording(self, terminal_phase):
-        if not self.recording_started or self.recording_stopped:
-            raise v15.ExpertFailure("v16 recording boundary is invalid")
-        self.gate(
-            "v16_focused_minimum_frames",
-            self.recorder.n >= MIN_FOCUSED_FRAMES,
-            f"frames={self.recorder.n} required={MIN_FOCUSED_FRAMES}",
-        )
-        self.recording_stopped = True
-        self.recording_terminal_phase = terminal_phase
-        self.ct.REC["metadata"]["recorded_terminal_phase"] = terminal_phase
-        self.ct.REC["metadata"]["recorded_frames"] = int(self.recorder.n)
-        self.ct.REC["metadata"]["recorded_seconds"] = round(
-            self.recorder.n / float(self.ct.REC_FPS), 4
-        )
-        self.ct.REC["on"] = False
-
     def phase(self, name):
         if (
             self.family == "T"
@@ -223,10 +203,6 @@ class SortingRollV16PilotExpert(v15.SortingRollExpert):
             self.recovery_injected = True
             v15.SortingRollExpert.phase(self, name)
             return
-        if self.family == "T" and name == "clear_table" and not self.recording_stopped:
-            self.stop_recording("lift_flat_from_pickup_support")
-        if self.family == "R" and name == "rotate_to_shelf" and not self.recording_stopped:
-            self.stop_recording("clear_table")
         v15.SortingRollExpert.phase(self, name)
 
     def _open_hand_without_recording(self, hand, stage):
@@ -398,10 +374,9 @@ class SortingRollV16PilotExpert(v15.SortingRollExpert):
         return success
 
     def finalize(self, success, error=None):
-        if self.recording_started and not self.recording_stopped:
-            self.recording_terminal_phase = self.ct.REC.get("phase")
+        if self.recording_started:
             self.ct.REC["metadata"]["recorded_terminal_phase"] = (
-                self.recording_terminal_phase
+                self.ct.REC.get("phase")
             )
             self.ct.REC["metadata"]["recorded_frames"] = int(self.recorder.n)
             self.ct.REC["metadata"]["recorded_seconds"] = round(

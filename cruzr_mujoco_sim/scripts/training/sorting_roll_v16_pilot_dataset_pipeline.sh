@@ -5,17 +5,27 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SIM_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 PROJECT_ROOT=$(cd "$SIM_ROOT/.." && pwd)
 ISAAC_PY=${ISAAC_PY:-/isaac-sim/python.sh}
-CAMPAIGN=sorting_roll_v16_pilot_mixed256_20260828
+CAMPAIGN=${SORTING_ROLL_V16_CAMPAIGN:-sorting_roll_v16_pilot_mixed256_20260828}
 V15_CAMPAIGN=sorting_roll_v15_diverse300_20260826_8x4090
-V16_CAMPAIGN=sorting_roll_v16_pilot_20260828_v3
+V16_CAMPAIGN=${SORTING_ROLL_V16_SOURCE_CAMPAIGN:-sorting_roll_v16_pilot_20260828_v3}
+V16_TASK_VERSION=${SORTING_ROLL_V16_TASK_VERSION:-sorting_roll_v16_expansion_pilot_sim}
+SAMPLING_PROFILE=${SORTING_ROLL_V16_SAMPLING_PROFILE:-pilot_old50}
 DATASET_V21=$SIM_ROOT/out/datasets/${CAMPAIGN}_lerobot_v21
 DATASET_V30=$SIM_ROOT/out/datasets/${CAMPAIGN}_lerobot_v30
 LOG_ROOT=$PROJECT_ROOT/log/$CAMPAIGN
 BUILD_REPORT=$LOG_ROOT/build_v21_report.json
 AUDIT_REPORT=$LOG_ROOT/dataset_v30_audit.json
 READINESS=$LOG_ROOT/data_training_readiness.json
-SAMPLING_WEIGHTS=$DATASET_V30/meta/sampling_weights_old50_h15_t15_r20.npy
-SAMPLING_REPORT=$LOG_ROOT/sampling_weights_old50_h15_t15_r20.json
+if [[ $SAMPLING_PROFILE == pilot_old50 ]]; then
+  SAMPLING_TAG=old50_h15_t15_r20
+elif [[ $SAMPLING_PROFILE == full_v2_old70 ]]; then
+  SAMPLING_TAG=old70_h10_t10_r10
+else
+  echo "unsupported sampling profile: $SAMPLING_PROFILE" >&2
+  exit 2
+fi
+SAMPLING_WEIGHTS=$DATASET_V30/meta/sampling_weights_${SAMPLING_TAG}.npy
+SAMPLING_REPORT=$LOG_ROOT/sampling_weights_${SAMPLING_TAG}.json
 REPO_ID=local/$CAMPAIGN
 
 if [[ ! -x "$ISAAC_PY" ]]; then
@@ -49,6 +59,7 @@ HF_HUB_OFFLINE=1 PYTHONPATH=. "$ISAAC_PY" \
   --repo-id "$REPO_ID" \
   --v15-campaign "$V15_CAMPAIGN" \
   --v16-campaign "$V16_CAMPAIGN" \
+  --v16-task-version "$V16_TASK_VERSION" \
   --build-report "$BUILD_REPORT" \
   --out "$AUDIT_REPORT" \
   >"$LOG_ROOT/dataset_v30_audit.log" 2>&1
@@ -60,6 +71,7 @@ PYTHONPATH=. "$ISAAC_PY" \
   --episodes 0:252 \
   --output "$SAMPLING_WEIGHTS" \
   --report "$SAMPLING_REPORT" \
+  --profile "$SAMPLING_PROFILE" \
   >"$LOG_ROOT/sampling_weights.log" 2>&1
 
 "$ISAAC_PY" - "$DATASET_V21" "$DATASET_V30" "$REPO_ID" \

@@ -22,6 +22,9 @@ class SortingRollV16PilotMatchedCanaryTests(unittest.TestCase):
         self.assertIn("CANARY_BATCH_SIZE=${CANARY_BATCH_SIZE:-8}", text)
         self.assertIn("PREFLIGHT_STEPS=${PREFLIGHT_STEPS:-5}", text)
         self.assertIn("PREFLIGHT_BATCH_SIZE=${PREFLIGHT_BATCH_SIZE:-8}", text)
+        self.assertIn("SORTING_ROLL_V16_TREATMENT_DATASET", text)
+        self.assertIn("SORTING_ROLL_V16_TREATMENT_WEIGHTS", text)
+        self.assertIn("SORTING_ROLL_V16_CANARY_GROUPS", text)
 
 
 if __name__ == "__main__":
