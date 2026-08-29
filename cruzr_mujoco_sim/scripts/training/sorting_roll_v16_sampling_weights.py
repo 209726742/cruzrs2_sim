@@ -20,6 +20,13 @@ V15_TASK_VERSION = "sorting_roll_v15_diverse_sim"
 SAMPLING_PROFILES = {
     "pilot_old50": {"old": 0.50, "H": 0.15, "T": 0.15, "R": 0.20},
     "full_v2_old70": {"old": 0.70, "H": 0.10, "T": 0.10, "R": 0.10},
+    "stage80_old50": {
+        "old": 0.50,
+        "H": 0.15,
+        "T": 0.15,
+        "R": 0.15,
+        "C": 0.05,
+    },
 }
 DEFAULT_PROFILE = "pilot_old50"
 TARGET_FRACTIONS = SAMPLING_PROFILES[DEFAULT_PROFILE]
@@ -33,12 +40,12 @@ def load_episode_rows(root: Path) -> list[dict]:
     ]
 
 
-def episode_family(row: dict) -> str:
+def episode_family(row: dict, supported_families=TARGET_FRACTIONS) -> str:
     if row["source_task_version"] == V15_TASK_VERSION:
         return "old"
     scenario = row.get("source_scenario") or {}
     family = scenario.get("scenario_family")
-    if family not in TARGET_FRACTIONS:
+    if family not in supported_families:
         raise ValueError(f"unsupported v16 family for episode {row['episode_index']}: {family}")
     return family
 
@@ -60,7 +67,11 @@ def build_frame_weights(
         raise ValueError(f"sampling weights may only contain train episodes: {non_train}")
 
     families = np.asarray(
-        [episode_family(rows[int(index)]) for index in frame_episode_indices], dtype=object
+        [
+            episode_family(rows[int(index)], target_fractions)
+            for index in frame_episode_indices
+        ],
+        dtype=object,
     )
     frame_counts = Counter(families.tolist())
     missing_families = sorted(set(target_fractions) - set(frame_counts))

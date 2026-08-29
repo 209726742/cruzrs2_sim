@@ -55,6 +55,33 @@ class SortingRollV16SamplingWeightsTests(unittest.TestCase):
             {"old": 0.70, "H": 0.10, "T": 0.10, "R": 0.10},
         )
 
+    def test_stage80_profile_includes_counterfactual_family(self):
+        profile = sampling.SAMPLING_PROFILES["stage80_old50"]
+        self.assertEqual(
+            profile,
+            {"old": 0.50, "H": 0.15, "T": 0.15, "R": 0.15, "C": 0.05},
+        )
+        rows = [
+            {
+                "episode_index": index,
+                "source_split": "train",
+                "source_task_version": (
+                    sampling.V15_TASK_VERSION if family == "old" else "v16"
+                ),
+                "source_scenario": (
+                    None if family == "old" else {"scenario_family": family}
+                ),
+            }
+            for index, family in enumerate(profile)
+        ]
+        episode_indices = np.arange(len(rows), dtype=np.int64)
+        _, report = sampling.build_frame_weights(
+            episode_indices,
+            rows,
+            profile,
+        )
+        self.assertEqual(report["expected_sampling_mass"], profile)
+
 
 if __name__ == "__main__":
     unittest.main()

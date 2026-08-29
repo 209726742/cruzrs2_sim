@@ -1,5 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
 import os
+from pathlib import Path
 import sys
+import tempfile
+import threading
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -15,6 +19,46 @@ import sorting_roll_scene as scene
 
 
 class SortingRollSceneTest(unittest.TestCase):
+    def test_atomic_scene_write_reuses_identical_destination(self):
+        payload = b"<mujoco/>"
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "scene.xml"
+            destination.write_bytes(payload)
+            before = destination.stat()
+            scene.atomic_write_bytes(destination, payload)
+            after = destination.stat()
+            self.assertEqual(after.st_ino, before.st_ino)
+            self.assertEqual(after.st_mtime_ns, before.st_mtime_ns)
+
+    def test_atomic_scene_write_never_exposes_partial_xml(self):
+        payload = (
+            b"<mujoco>" + b"<body name='test'/>" * 1000 + b"</mujoco>"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "scene.xml"
+            destination.write_bytes(b"<mujoco/>")
+            stop = threading.Event()
+            errors = []
+
+            def read_repeatedly():
+                while not stop.is_set():
+                    try:
+                        ET.parse(destination)
+                    except ET.ParseError as error:
+                        errors.append(error)
+                        stop.set()
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                reader = executor.submit(read_repeatedly)
+                try:
+                    for _ in range(8):
+                        scene.atomic_write_bytes(destination, payload)
+                finally:
+                    stop.set()
+                    reader.result()
+            self.assertEqual(errors, [])
+            ET.parse(destination)
+
     def test_layout_contract(self):
         report = scene.layout_report()
         self.assertTrue(all(report["checks"].values()), report)

@@ -141,6 +141,7 @@ RELEASE_OPEN_INITIAL_BACKOFF_M = 0.010
 RELEASE_OPEN_BACKOFF_STEP_M = 0.004
 RELEASE_OPEN_BACKOFF_MAX_M = 0.050
 RELEASE_OPEN_CLEARANCE_LIFT_MAX_M = 0.010
+RELEASE_NEAR_SHELF_GRIP_TARGET_M = None
 RELEASE_OPEN_FINAL_SETTLE_TICKS = 12
 RELEASE_PAD_SLIDING_FRICTION = 1.0
 RELEASE_FRICTION_SETTLE_TICKS = 12
@@ -191,7 +192,7 @@ ARM_TRACK_MAX_TICKS = 900
 ARM_SERVO_MAX_STEP_RAD = 0.016
 ARM_SERVO_MIN_TICKS = 12
 ARM_SERVO_SETTLE_TICKS = 2
-GRASP_SETTLE_TICKS = 60
+GRASP_SETTLE_TICKS = 20
 RANDOM_BASE_XY_LIMIT_M = 0.015
 RANDOM_BASE_YAW_LIMIT_RAD = 0.025
 RANDOM_ROLL_XY_LIMIT_M = 0.004
@@ -1451,6 +1452,7 @@ class SortingRollExpert:
     def arm_shelf_contacts(self):
         all_arm = self.arm_geom_ids["l"] | self.arm_geom_ids["r"]
         contacts = []
+        force = np.zeros(6, dtype=float)
         for index in range(self.data.ncon):
             geom1 = int(self.data.contact[index].geom1)
             geom2 = int(self.data.contact[index].geom2)
@@ -1459,6 +1461,9 @@ class SortingRollExpert:
                 or (geom2 in all_arm and geom1 in self.shelf_geom_ids)
             ):
                 continue
+            self.mujoco.mj_contactForce(
+                self.model, self.data, index, force
+            )
             contacts.append({
                 "pair": [self.geom_label(geom1), self.geom_label(geom2)],
                 "penetration_mm": round(
@@ -1467,6 +1472,7 @@ class SortingRollExpert:
                     ),
                     3,
                 ),
+                "normal_force_n": round(abs(float(force[0])), 6),
             })
         return contacts
 
@@ -1688,12 +1694,13 @@ class SortingRollExpert:
         target_yaw,
         max_speed=BASE_MAX_SPEED,
         tolerance=0.008,
+        max_yaw_rate=BASE_MAX_YAW_RATE,
     ):
         target_xy = np.asarray(target_xy, dtype=float)
         pose = self.ct.base_pose()
         if float(np.linalg.norm(target_xy - pose[:2])) > tolerance:
             heading = math.atan2(target_xy[1] - pose[1], target_xy[0] - pose[0])
-            self.turn_in_place(heading)
+            self.turn_in_place(heading, max_rate=max_yaw_rate)
         for _ in range(5000):
             x, y, yaw = self.ct.base_pose()
             delta = target_xy - np.array([x, y])
@@ -1703,7 +1710,7 @@ class SortingRollExpert:
             heading = math.atan2(delta[1], delta[0])
             heading_error = angle(heading - yaw)
             if abs(heading_error) > 0.25:
-                self.turn_in_place(heading)
+                self.turn_in_place(heading, max_rate=max_yaw_rate)
                 continue
             speed_cap = min(
                 max_speed,
@@ -1711,7 +1718,7 @@ class SortingRollExpert:
             )
             speed = min(max(0.025, distance), speed_cap)
             yaw_cap = min(
-                BASE_MAX_YAW_RATE,
+                max_yaw_rate,
                 self.brake_cap(heading_error, BASE_YAW_ACCEL),
             )
             self.set_base_velocity(
@@ -1722,7 +1729,7 @@ class SortingRollExpert:
         else:
             raise ExpertFailure(f"navigation timeout target={target_xy.tolist()}")
         self.stop_base()
-        self.turn_in_place(target_yaw)
+        self.turn_in_place(target_yaw, max_rate=max_yaw_rate)
 
     def reverse(self, distance, max_speed=0.16):
         start = self.ct.base_pose()
@@ -3300,6 +3307,7 @@ class SortingRollExpert:
         attempts=12,
         shelf_safe=False,
         require_held_stage=None,
+        axis_step_limits=None,
     ):
         target = np.asarray(target, dtype=float)
         tolerance = np.asarray(tolerance, dtype=float)
@@ -3316,10 +3324,16 @@ class SortingRollExpert:
                 if command_space
                 else self.move_mounts_delta
             )
-            move_delta(
-                bounded_vector(command_error, max_step),
-                shelf_safe=shelf_safe,
+            command_delta = (
+                bounded_vector(command_error, max_step)
+                if axis_step_limits is None
+                else np.clip(
+                    command_error,
+                    -np.asarray(axis_step_limits, dtype=float),
+                    np.asarray(axis_step_limits, dtype=float),
+                )
             )
+            move_delta(command_delta, shelf_safe=shelf_safe)
             if require_held_stage is not None:
                 self.require_held(
                     f"{require_held_stage}_{attempt + 1:02d}"
@@ -3561,6 +3575,9 @@ class SortingRollExpert:
             }),
         )
 
+    def clear_released_hands_before_lift(self):
+        pass
+
     def release_into_integrated_top_tier(self):
         for geom in self.pad_ids:
             self.model.geom_friction[geom, 0] = (
@@ -3641,8 +3658,21 @@ class SortingRollExpert:
             self.data.xpos[self.ct.R.mount, 2],
         ]))
         self.ct.GRIP_RATE = RELEASE_GRIP_RATE
-        self.ct.grip_cmd["l"] = self.ct.GRIP_OPEN
-        self.ct.grip_cmd["r"] = self.ct.GRIP_OPEN
+        near_shelf_grip_target = (
+            self.ct.GRIP_OPEN
+            if RELEASE_NEAR_SHELF_GRIP_TARGET_M is None
+            else float(RELEASE_NEAR_SHELF_GRIP_TARGET_M)
+        )
+        if not (
+            self.ct.GRIP_OPEN
+            <= near_shelf_grip_target
+            < self.ct.GRIP_CLOSE
+        ):
+            raise ExpertFailure(
+                "release near-shelf grip target is outside the actuator range"
+            )
+        self.ct.grip_cmd["l"] = near_shelf_grip_target
+        self.ct.grip_cmd["r"] = near_shelf_grip_target
         self.move_mount_commands_delta(
             [
                 -RELEASE_OPEN_INITIAL_BACKOFF_M,
@@ -3651,14 +3681,23 @@ class SortingRollExpert:
             ],
             shelf_safe=True,
         )
-        max_steps = int(round(
+        backoff_max_steps = int(round(
             (
                 RELEASE_OPEN_BACKOFF_MAX_M
                 - RELEASE_OPEN_INITIAL_BACKOFF_M
             )
             / RELEASE_OPEN_BACKOFF_STEP_M
         ))
+        lateral_step = getattr(self, "release_lateral_step_m", 0.0)
+        lateral_max_steps = getattr(
+            self,
+            "release_lateral_max_steps",
+            0,
+        )
+        max_steps = backoff_max_steps + lateral_max_steps
         release_steps = 0
+        release_backoff_steps = 0
+        release_lateral_steps = 0
         release_clear_confirmed = False
         for _ in range(RELEASE_OPEN_FINAL_SETTLE_TICKS):
             self.frames(1)
@@ -3667,6 +3706,11 @@ class SortingRollExpert:
             )
         left = self.grip_evidence("L")
         right = self.grip_evidence("R")
+        self.gates["near_shelf_partial_open_evidence"] = {
+            "target_m": near_shelf_grip_target,
+            "left": left,
+            "right": right,
+        }
         for candidate_step in range(1, max_steps + 1):
             if release_is_clear(left, right):
                 for _ in range(RELEASE_OPEN_FINAL_SETTLE_TICKS):
@@ -3685,12 +3729,28 @@ class SortingRollExpert:
                 current_depth_margin
                 >= 0.005 + RELEASE_OPEN_BACKOFF_STEP_M,
                 f"step={candidate_step}/{max_steps} "
-                f"depth_margin_mm={1000.0 * current_depth_margin:.2f}",
+                f"depth_margin_mm={1000.0 * current_depth_margin:.2f} "
+                f"left={left['force_n']:.3f}N/{left['pads']} "
+                f"right={right['force_n']:.3f}N/{right['pads']}",
             )
-            self.move_mount_commands_delta(
-                [-RELEASE_OPEN_BACKOFF_STEP_M, 0.0, 0.0],
-                shelf_safe=True,
-            )
+            if (
+                lateral_step > 0.0
+                and release_lateral_steps < lateral_max_steps
+            ):
+                self.move_mount_command_deltas(
+                    {
+                        "l": np.array([0.0, lateral_step, 0.0]),
+                        "r": np.array([0.0, -lateral_step, 0.0]),
+                    },
+                    shelf_safe=True,
+                )
+                release_lateral_steps += 1
+            else:
+                self.move_mount_commands_delta(
+                    [-RELEASE_OPEN_BACKOFF_STEP_M, 0.0, 0.0],
+                    shelf_safe=True,
+                )
+                release_backoff_steps += 1
             release_steps = candidate_step
             current_depth_margin = self.current_integrated_depth_margin()
             self.gate(
@@ -3712,11 +3772,13 @@ class SortingRollExpert:
         right = self.grip_evidence("R")
         actual_backoff = (
             RELEASE_OPEN_INITIAL_BACKOFF_M
-            + release_steps * RELEASE_OPEN_BACKOFF_STEP_M
+            + release_backoff_steps * RELEASE_OPEN_BACKOFF_STEP_M
         )
         actual_open_lift = RELEASE_OPEN_CLEARANCE_LIFT_MAX_M
         self.gates["release_contact_geometry"] = {
             "steps": release_steps,
+            "backoff_steps": release_backoff_steps,
+            "lateral_steps": release_lateral_steps,
             "backoff_m": actual_backoff,
             "opening_lift_m": actual_open_lift,
             "after_feedback_backoff": self.roll_pad_contact_geometry(),
@@ -3742,6 +3804,7 @@ class SortingRollExpert:
             and after_checks["released_from_both_grippers"],
             json.dumps(after_open, ensure_ascii=False),
         )
+        self.clear_released_hands_before_lift()
         self.move_mount_commands_delta(
             [
                 0.0,
@@ -3771,6 +3834,32 @@ class SortingRollExpert:
             f"left={left['force_n']:.3f}N/{left['pads']} "
             f"right={right['force_n']:.3f}N/{right['pads']}",
         )
+        if near_shelf_grip_target != self.ct.GRIP_OPEN:
+            self.ct.grip_cmd["l"] = self.ct.GRIP_OPEN
+            self.ct.grip_cmd["r"] = self.ct.GRIP_OPEN
+            full_open_ticks = (
+                int(math.ceil(
+                    (near_shelf_grip_target - self.ct.GRIP_OPEN)
+                    * CONTROL_FPS
+                    / RELEASE_GRIP_RATE
+                ))
+                + RELEASE_OPEN_FINAL_SETTLE_TICKS
+            )
+            for _ in range(full_open_ticks):
+                self.frames(1)
+                self.require_arms_clear_shelf(
+                    "full_open_after_clearance_lift"
+                )
+            finger_positions = [
+                float(self.data.qpos[address])
+                for arm in (self.ct.L, self.ct.R)
+                for address in arm.grip_qadr
+            ]
+            self.gate(
+                "hands_fully_open_after_clearance_lift",
+                max(finger_positions) <= self.ct.GRIP_OPEN + 0.001,
+                f"finger_positions_m={np.round(finger_positions, 5).tolist()}",
+            )
         self.gates["post_open_hand_lift_evidence"] = (
             self.evaluate_placement(self.model, self.data)
         )
@@ -3804,6 +3893,12 @@ class SortingRollExpert:
         roll_axis /= float(np.linalg.norm(roll_axis))
         positions = {}
         rotations = {}
+        tip_bias_y_m = getattr(
+            self, "flat_pick_tip_bias_y_m", FLAT_PICK_TIP_BIAS_Y_M
+        )
+        tip_bias_y_m_by_hand = getattr(
+            self, "flat_pick_tip_bias_y_m_by_hand", {}
+        )
         for hand, arm, direction in (
             ("l", self.ct.L, 1.0),
             ("r", self.ct.R, -1.0),
@@ -3822,7 +3917,11 @@ class SortingRollExpert:
             target_pad_position = (
                 roll_position
                 + direction * FLAT_PICK_TARGET_ALONG_M * roll_axis
-                + np.array([0.0, FLAT_PICK_TIP_BIAS_Y_M, 0.0])
+                + np.array([
+                    0.0,
+                    tip_bias_y_m_by_hand.get(hand, tip_bias_y_m),
+                    0.0,
+                ])
             )
             positions[hand] = mount_position_for_pad_target(
                 target_pad_position,
@@ -3886,10 +3985,16 @@ class SortingRollExpert:
         initial_joints = self.arm_joint_positions()
 
         self.phase("navigate_to_table_observation")
+        table_navigation_max_yaw_rate = getattr(
+            self,
+            "table_navigation_max_yaw_rate",
+            BASE_MAX_YAW_RATE,
+        )
         self.go_to(
             TABLE_OBSERVATION_XY,
             -math.pi / 2.0,
-            max_speed=0.26,
+            max_speed=getattr(self, "table_observation_max_speed", 0.26),
+            max_yaw_rate=table_navigation_max_yaw_rate,
         )
         target_motion = max(
             float(np.max(np.abs(self.ct.qtgt[hand] - initial_targets[hand])))
@@ -3937,6 +4042,7 @@ class SortingRollExpert:
             -math.pi / 2.0,
             max_speed=0.25,
             tolerance=0.003,
+            max_yaw_rate=table_navigation_max_yaw_rate,
         )
         self.turn_in_place(
             -math.pi / 2.0,
@@ -4120,6 +4226,11 @@ class SortingRollExpert:
         stage_center[0] += SHELF_STAGE_OFFSET_X
         stage_center[1] = RELEASE_APPROACH_Y_BIAS_M
         stage_center[2] = roll[2]
+        stage_center_tolerance = getattr(
+            self,
+            "release_stage_center_tolerance_m",
+            [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
+        )
         shelf_base = stage_center[:2] - carried_offset
         travel_heading = math.atan2(
             shelf_base[1] - base[1],
@@ -4164,7 +4275,7 @@ class SortingRollExpert:
         self.align_roll_center(
             stage_center,
             "high_stage_realignment",
-            [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
+            stage_center_tolerance,
             command_space=True,
             max_step=0.02,
             attempts=12,
@@ -4177,7 +4288,7 @@ class SortingRollExpert:
         self.align_roll_center(
             stage_center,
             "after_release_surface_leveling",
-            [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
+            stage_center_tolerance,
             command_space=True,
             max_step=0.004,
             attempts=8,
@@ -4194,7 +4305,7 @@ class SortingRollExpert:
         self.align_roll_center(
             stage_center,
             "high_stage_centered_before_entry",
-            [0.002, PRE_RELEASE_Y_TOLERANCE_M, 0.002],
+            stage_center_tolerance,
             command_space=True,
             max_step=0.004,
             attempts=8,
@@ -4204,7 +4315,11 @@ class SortingRollExpert:
 
         self.phase("lower_to_front_lip_clearance")
         clearance_target = stage_center.copy()
-        clearance_target[2] = RELEASE_CLEARANCE_ROLL_Z
+        clearance_target[2] = getattr(
+            self,
+            "release_clearance_roll_z_m",
+            RELEASE_CLEARANCE_ROLL_Z,
+        )
         self.align_roll_center(
             clearance_target,
             "front_lip_clearance_height",
@@ -4214,6 +4329,11 @@ class SortingRollExpert:
             attempts=20,
             shelf_safe=True,
             require_held_stage="front_lip_clearance_lowering",
+            axis_step_limits=getattr(
+                self,
+                "release_clearance_axis_step_limits_m",
+                None,
+            ),
         )
         self.require_held("front_lip_clearance_height")
 

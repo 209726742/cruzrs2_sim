@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the admitted v15-train + v16-pilot LeRobot v2.1 dataset."""
+"""Build an admitted v15-train + v16 pilot/expansion LeRobot v2.1 dataset."""
 
 from __future__ import annotations
 
@@ -15,9 +15,11 @@ CORE_DIR = SCRIPT_DIR.parent / "core"
 sys.path[:0] = [str(SCRIPT_DIR), str(CORE_DIR)]
 
 import sorting_roll_build_v21 as builder  # noqa: E402
+from sorting_roll_v16_expansion_contract import (  # noqa: E402
+    load_manifest as load_expansion_manifest,
+)
 from sorting_roll_v16_pilot_contract import (  # noqa: E402
-    TASK_VERSION,
-    load_manifest,
+    load_manifest as load_pilot_manifest,
 )
 from sorting_roll_v16_validate import validate_episode  # noqa: E402
 
@@ -41,6 +43,11 @@ SCENARIO_FIELDS = (
     "distractor_object_ids",
     "requested_transforms",
     "applied_transforms",
+    "target_lane",
+    "distractor_color",
+    "counterfactual_scene",
+    "counterfactual_scene_report",
+    "counterfactual_evidence",
 )
 
 
@@ -113,8 +120,12 @@ def attach_v15_reuse(sources, dataset):
         )
 
 
-def load_v16_sources(root, manifest_path):
-    manifest = load_manifest(manifest_path)
+def load_v16_sources(root, manifest_path, manifest_kind="pilot"):
+    loaders = {
+        "pilot": load_pilot_manifest,
+        "expansion": load_expansion_manifest,
+    }
+    manifest = loaders[manifest_kind](manifest_path)
     sources = []
     for assignment in manifest["assignments"]:
         episode = root / f"seed_{assignment['seed']}"
@@ -128,7 +139,7 @@ def load_v16_sources(root, manifest_path):
         episode_meta = meta["episode_metadata"]
         source = dict(info)
         source.update({
-            "task_version": TASK_VERSION,
+            "task_version": manifest["task_version"],
             "collection_profile": episode_meta["collection_profile"],
             "prompt": meta["prompt"],
             "diversity": meta["diversity"],
@@ -138,13 +149,21 @@ def load_v16_sources(root, manifest_path):
             },
         })
         sources.append(source)
-    if len(sources) != 16:
-        raise ValueError(f"expected 16 admitted v16 sources, got {len(sources)}")
-    return builder.sort_sources(sources)
+    if len(sources) != manifest["count"]:
+        raise ValueError(
+            f"expected {manifest['count']} admitted v16 sources, got {len(sources)}"
+        )
+    return builder.sort_sources(sources), manifest
 
 
 def split_counts(sources):
     return dict(sorted(Counter(source["split"] for source in sources).items()))
+
+
+def expected_mixed_split_counts(manifest, v15_count):
+    counts = dict(manifest["counts"]["split"])
+    counts["train"] += v15_count
+    return dict(sorted(counts.items()))
 
 
 def parse_args(argv=None):
@@ -153,6 +172,11 @@ def parse_args(argv=None):
     parser.add_argument("--v15-v21", type=Path, required=True)
     parser.add_argument("--v16-root", type=Path, required=True)
     parser.add_argument("--v16-manifest", type=Path, required=True)
+    parser.add_argument(
+        "--manifest-kind",
+        choices=("pilot", "expansion"),
+        default="pilot",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--encode-workers", type=int, default=4)
@@ -168,11 +192,16 @@ def main(argv=None):
         raise SystemExit(f"refusing to overwrite report: {args.report}")
     v15 = load_v15_train_sources(args.v15_validation)
     attach_v15_reuse(v15, args.v15_v21.resolve())
-    v16 = load_v16_sources(args.v16_root.resolve(), args.v16_manifest.resolve())
+    v16, manifest = load_v16_sources(
+        args.v16_root.resolve(),
+        args.v16_manifest.resolve(),
+        args.manifest_kind,
+    )
     sources = builder.sort_sources(v15 + v16)
     counts = split_counts(sources)
-    if counts != EXPECTED_COUNTS:
-        raise ValueError(f"mixed split counts {counts} != {EXPECTED_COUNTS}")
+    expected_counts = expected_mixed_split_counts(manifest, len(v15))
+    if counts != expected_counts:
+        raise ValueError(f"mixed split counts {counts} != {expected_counts}")
     if len({source["seed"] for source in sources}) != len(sources):
         raise ValueError("mixed sources contain duplicate seeds")
     builder.build_dataset(sources, args.out.resolve(), args.encode_workers)
@@ -184,7 +213,10 @@ def main(argv=None):
         "schema_version": 1,
         "dataset": str(args.out.resolve()),
         "v15_train_count": len(v15),
-        "v16_pilot_count": len(v16),
+        "v16_pilot_count": len(v16) if args.manifest_kind == "pilot" else 0,
+        "v16_source_count": len(v16),
+        "v16_manifest_kind": args.manifest_kind,
+        "v16_task_version": manifest["task_version"],
         "total_count": len(sources),
         "split_counts": counts,
         "v16_family_counts": family_counts,

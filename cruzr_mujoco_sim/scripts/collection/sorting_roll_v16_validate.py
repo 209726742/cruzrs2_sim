@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Sorting Roll v16 H/T/R pilot episodes before dataset ingestion."""
+"""Validate Sorting Roll v16 H/T/R/C episodes before dataset ingestion."""
 
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ from sorting_roll_validate import (  # noqa: E402
 
 
 MIN_FOCUSED_FRAMES = 150
+MAX_GRASP_TO_LIFT_FRAMES = 20
 FAMILY_PHASES = {
     "H": ("initial_hold", "terminal_success_hold"),
     "T": (
@@ -42,6 +43,7 @@ FAMILY_PHASES = {
         "terminal_success_hold",
     ),
     "R": ("recovery_", "terminal_success_hold"),
+    "C": ("initial_hold", "terminal_success_hold"),
 }
 FAMILY_GATES = {
     "H": ("v16_pickup_support_physical_settle",),
@@ -55,11 +57,53 @@ FAMILY_GATES = {
         "held_flat_support_lift",
         "pickup_support_cleared_after_lift",
     ),
+    "C": (
+        "v16_c_pair_physical_settle",
+        "v16_c_target_binding",
+        "held_flat_pickup",
+        "held_flat_support_lift",
+        "pickup_support_cleared_after_lift",
+        "v16_c_target_in_integrated_slot",
+        "v16_c_distractor_stationary",
+    ),
 }
 
 
 def _all_equal(values):
     return all(value == values[0] for value in values[1:])
+
+
+def grasp_to_lift_transition(phases, actions):
+    phases = np.asarray(phases).astype(str)
+    actions = np.asarray(actions)
+    if phases.ndim != 1 or actions.ndim != 2:
+        return None, ["phase/action arrays have invalid dimensions"]
+    if len(phases) != len(actions) or actions.shape[1] < 16:
+        return None, ["phase/action arrays do not satisfy the 16-D contract"]
+    lift_indices = np.flatnonzero(phases == "lift_flat_from_pickup_support")
+    if not len(lift_indices):
+        return None, ["lift phase is missing"]
+    lift_frame = int(lift_indices[0])
+    closed = np.all(actions[:, 14:16] < 0.5, axis=1)
+    close_frame = lift_frame - 1
+    if close_frame < 0 or not closed[close_frame]:
+        return None, ["both grippers are not closed before lift"]
+    while close_frame > 0 and closed[close_frame - 1]:
+        close_frame -= 1
+    transition_frames = lift_frame - close_frame
+    report = {
+        "both_grippers_closed_frame": close_frame,
+        "lift_start_frame": lift_frame,
+        "transition_frames": transition_frames,
+        "maximum_frames": MAX_GRASP_TO_LIFT_FRAMES,
+    }
+    errors = []
+    if transition_frames > MAX_GRASP_TO_LIFT_FRAMES:
+        errors.append(
+            "grasp-to-lift transition exceeds "
+            f"{MAX_GRASP_TO_LIFT_FRAMES} frames: {transition_frames}"
+        )
+    return report, errors
 
 
 def transform_errors(assignment, applied):
@@ -123,7 +167,7 @@ def v16_metadata_errors(meta, result, assignment, phases, num_frames):
         meta.get("task_version"),
         episode_meta.get("task_version"),
         result.get("task_version"),
-        TASK_VERSION,
+        assignment["task_version"],
     ]):
         errors.append("task version mismatch")
     seed = assignment["seed"]
@@ -198,6 +242,12 @@ def v16_metadata_errors(meta, result, assignment, phases, num_frames):
         "distractor_object_ids",
         "requested_transforms",
     )
+    if assignment["scenario_family"] == "C":
+        scenario_fields += (
+            "target_lane",
+            "distractor_color",
+            "counterfactual_scene",
+        )
     for field in scenario_fields:
         values = [meta.get(field), episode_meta.get(field), result.get(field)]
         if not _all_equal(values) or values[0] != assignment[field]:
@@ -251,6 +301,45 @@ def v16_metadata_errors(meta, result, assignment, phases, num_frames):
     elif evidence_values[0] is not None:
         errors.append("non-recovery episode contains intervention evidence")
 
+    counterfactual_values = [
+        meta.get("counterfactual_evidence"),
+        episode_meta.get("counterfactual_evidence"),
+        result.get("counterfactual_evidence"),
+    ]
+    if not _all_equal(counterfactual_values):
+        errors.append("counterfactual evidence is inconsistent")
+    if family == "C":
+        evidence = counterfactual_values[0]
+        if not isinstance(evidence, dict):
+            errors.append("counterfactual evidence is missing")
+        else:
+            binding = evidence.get("target_binding") or {}
+            motion = evidence.get("distractor_motion") or {}
+            if (
+                binding.get("target_color") != assignment["target_color"]
+                or binding.get("distractor_color")
+                != assignment["distractor_color"]
+                or binding.get("target_lane") != assignment["target_lane"]
+                or binding.get("max_rgba_error", float("inf")) > 1e-6
+            ):
+                errors.append("counterfactual target binding is invalid")
+            if (
+                motion.get("translation_m", float("inf")) > 0.010
+                or motion.get("rotation_deg", float("inf")) > 2.0
+                or motion.get("speed", float("inf")) > 0.05
+            ):
+                errors.append("counterfactual distractor moved")
+            target_final = evidence.get("target_final_evidence") or {}
+            if (
+                target_final.get("instantaneous_success") is not True
+                or target_final.get("stable_seconds", 0.0) < 2.0
+            ):
+                errors.append("counterfactual target is not stably in slot")
+    elif counterfactual_values[0] is not None:
+        errors.append(
+            "non-counterfactual episode contains counterfactual evidence"
+        )
+
     diversity_values = [
         meta.get("diversity"),
         episode_meta.get("diversity"),
@@ -266,11 +355,18 @@ def v16_metadata_errors(meta, result, assignment, phases, num_frames):
         if not isinstance(base, dict):
             errors.append("base v15 diversity report is missing")
         else:
-            pseudo_meta = {"prompt": meta.get("prompt"), "diversity": base}
+            base_prompt = (
+                (base.get("assignment") or {}).get("prompt")
+                if family == "C"
+                else meta.get("prompt")
+            )
+            pseudo_meta = {"prompt": base_prompt, "diversity": base}
             pseudo_episode_meta = {"diversity": base}
             pseudo_result = {
                 "task_version": DIVERSE_TASK_VERSION,
-                "prompt": result.get("prompt"),
+                "prompt": (
+                    base_prompt if family == "C" else result.get("prompt")
+                ),
                 "diversity": base,
                 "scene_randomization": result.get("scene_randomization"),
             }
@@ -293,11 +389,16 @@ def validate_episode(path, assignment):
     if isinstance(num_frames, bool) or not isinstance(num_frames, int):
         return None, ["meta.num_frames is not an integer"]
     phases = np.asarray([])
+    transition = None
     try:
         with np.load(path / "episode_data.npz", allow_pickle=False) as data:
             payload = {name: np.asarray(data[name]) for name in data.files}
         phases = np.asarray(payload.get("phase", []))
         errors.extend(payload_errors(payload, num_frames))
+        transition, transition_errors = grasp_to_lift_transition(
+            phases, payload.get("action", np.asarray([]))
+        )
+        errors.extend(transition_errors)
     except (OSError, ValueError) as exc:
         errors.append(f"cannot read episode_data.npz: {exc}")
     try:
@@ -316,6 +417,7 @@ def validate_episode(path, assignment):
         "scenario_variant": assignment["scenario_variant"],
         "num_frames": num_frames,
         "sim_seconds": result.get("sim_seconds"),
+        "grasp_to_lift_transition": transition,
     }, errors
 
 

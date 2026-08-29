@@ -19,6 +19,17 @@ class SortingRollV16BuildMixedV21Tests(unittest.TestCase):
         )
         self.assertEqual(mixed.split_counts(sources), mixed.EXPECTED_COUNTS)
 
+    def test_expected_stage80_split_counts(self):
+        manifest = {
+            "counts": {
+                "split": {"train": 64, "val": 8, "test": 8},
+            },
+        }
+        self.assertEqual(
+            mixed.expected_mixed_split_counts(manifest, 240),
+            {"test": 8, "train": 304, "val": 8},
+        )
+
     def test_reuse_video_paths_require_all_policy_cameras(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

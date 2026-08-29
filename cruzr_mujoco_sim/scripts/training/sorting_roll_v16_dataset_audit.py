@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit the v15-train + v16-pilot LeRobot v3.0 candidate dataset."""
+"""Audit a v15-train + admitted v16 LeRobot v3.0 candidate dataset."""
 
 from __future__ import annotations
 
@@ -50,12 +50,34 @@ def decode_json_extension(value):
         value = json.loads(value)
     return value
 
+def split_ranges(counts):
+    start = 0
+    ranges = {}
+    for split in ("train", "val", "test"):
+        stop = start + int(counts[split])
+        ranges[split] = f"{start}:{stop}"
+        start = stop
+    return ranges
 
-def scenario_errors(rows, v16_task_version=V16_TASK_VERSION):
+
+def sampled_episode_indices(total, split_counts):
+    train_stop = int(split_counts["train"])
+    val_stop = train_stop + int(split_counts["val"])
+    candidates = (0, 3, 239, 240, train_stop - 1, train_stop, val_stop, total - 1)
+    return tuple(sorted({index for index in candidates if 0 <= index < total}))
+
+
+
+def scenario_errors(
+    rows,
+    v16_task_version=V16_TASK_VERSION,
+    expected_v16_count=16,
+    expected_families=EXPECTED_FAMILIES,
+):
     errors = []
     v15 = [row for row in rows if row["source_task_version"] == V15_TASK_VERSION]
     v16 = [row for row in rows if row["source_task_version"] == v16_task_version]
-    if len(v15) != 240 or len(v16) != 16:
+    if len(v15) != 240 or len(v16) != expected_v16_count:
         errors.append(f"task-version counts are v15={len(v15)} v16={len(v16)}")
     if any(row.get("source_split") != "train" for row in v15):
         errors.append("old v15 val/test leaked into the mixed dataset")
@@ -65,9 +87,10 @@ def scenario_errors(rows, v16_task_version=V16_TASK_VERSION):
         (row.get("source_scenario") or {}).get("scenario_family")
         for row in v16
     ).items(), key=lambda item: str(item[0])))
-    if family_counts != EXPECTED_FAMILIES:
-        errors.append(f"v16 family counts {family_counts} != {EXPECTED_FAMILIES}")
+    if family_counts != expected_families:
+        errors.append(f"v16 family counts {family_counts} != {expected_families}")
     group_splits = defaultdict(set)
+    counterfactual_pairs = defaultdict(list)
     for row in v16:
         scenario = row.get("source_scenario") or {}
         group = scenario.get("scene_group_id")
@@ -87,8 +110,26 @@ def scenario_errors(rows, v16_task_version=V16_TASK_VERSION):
                 or evidence.get("completed_before_recording") is not True
             ):
                 errors.append("v16 recovery boundary metadata is invalid")
+        if scenario.get("scenario_family") == "C":
+            pair_id = scenario.get("counterfactual_pair_id")
+            if not pair_id:
+                errors.append("v16 counterfactual row is missing pair id")
+            else:
+                counterfactual_pairs[pair_id].append(scenario)
+            if not scenario.get("target_color") or not scenario.get("distractor_color"):
+                errors.append("v16 counterfactual row is missing color binding")
+            if not scenario.get("distractor_object_ids"):
+                errors.append("v16 counterfactual row is missing distractor ids")
     if any(len(splits) != 1 for splits in group_splits.values()):
         errors.append("a v16 scene group crosses dataset splits")
+    for pair_id, scenarios in counterfactual_pairs.items():
+        if len(scenarios) != 2:
+            errors.append(f"counterfactual pair {pair_id} does not contain two rows")
+            continue
+        if {scenario.get("target_lane") for scenario in scenarios} != {"left", "right"}:
+            errors.append(f"counterfactual pair {pair_id} does not swap target lanes")
+        if len({scenario.get("target_color") for scenario in scenarios}) != 2:
+            errors.append(f"counterfactual pair {pair_id} does not swap target colors")
     return errors, family_counts
 
 
@@ -98,6 +139,15 @@ def audit(args):
     stats = json.loads((root / "meta" / "stats.json").read_text())
     build = json.loads(args.build_report.read_text())
     errors = []
+    split_counts_expected = dict(build.get("split_counts") or {})
+    total_expected = int(build.get("total_count", 0))
+    v16_count_expected = int(
+        build.get("v16_source_count", build.get("v16_pilot_count", 0))
+    )
+    families_expected = dict(build.get("v16_family_counts") or {})
+    splits_expected = split_ranges(split_counts_expected)
+    sampled_episodes = sampled_episode_indices(total_expected, split_counts_expected)
+    task_rows = pq.read_table(root / "meta" / "tasks.parquet").to_pylist()
     expected_info = {
         "codebase_version": "v3.0",
         "source_task_version": "mixed",
@@ -105,18 +155,21 @@ def audit(args):
         "source_campaign": None,
         "source_campaigns": sorted((args.v15_campaign, args.v16_campaign)),
         "collection_profile": COLLECTION_PROFILE,
-        "total_episodes": 256,
-        "total_source_episodes": 256,
+        "total_episodes": total_expected,
+        "total_source_episodes": total_expected,
         "fps": 30,
-        "total_tasks": 5,
-        "splits": EXPECTED_SPLITS,
+        "total_tasks": len(task_rows),
+        "splits": splits_expected,
     }
     for key, expected in expected_info.items():
         if info.get(key) != expected:
             errors.append(f"info.{key}={info.get(key)!r}, expected {expected!r}")
-    if build.get("passed") is not True or build.get("split_counts") != {
-        "test": 2, "train": 252, "val": 2
-    }:
+    if (
+        build.get("passed") is not True
+        or total_expected != 240 + v16_count_expected
+        or sum(split_counts_expected.values()) != total_expected
+        or not families_expected
+    ):
         errors.append("mixed build report is not admitted")
     if info.get("source_diversity_counts") != {}:
         errors.append("mixed dataset must not mislabel v15-only diversity counts as global")
@@ -144,20 +197,17 @@ def audit(args):
             errors.append(f"{key} is missing q01/q99 statistics")
 
     episode_rows = load_episode_rows(root)
-    task_rows = pq.read_table(root / "meta" / "tasks.parquet").to_pylist()
     task_by_index = {int(row["task_index"]): row["task"] for row in task_rows}
     prompt_by_episode = {
         int(row["episode_index"]): row["tasks"][0] for row in episode_rows
     }
-    if len(episode_rows) != 256:
-        errors.append(f"episode metadata count is {len(episode_rows)}, expected 256")
+    if len(episode_rows) != total_expected:
+        errors.append(f"episode metadata count is {len(episode_rows)}, expected {total_expected}")
     else:
         seeds = [int(row["source_seed"]) for row in episode_rows]
-        if len(set(seeds)) != 256:
+        if len(set(seeds)) != total_expected:
             errors.append("episode source seeds are not unique")
-        if Counter(row["source_split"] for row in episode_rows) != {
-            "train": 252, "val": 2, "test": 2
-        }:
+        if dict(Counter(row["source_split"] for row in episode_rows)) != split_counts_expected:
             errors.append("episode split counts are invalid")
         if any(
             row["source_collection_profile"] != COLLECTION_PROFILE
@@ -167,7 +217,8 @@ def audit(args):
         if any(row.get("tasks") != [prompt_by_episode[index]] for index, row in enumerate(episode_rows)):
             errors.append("episode task text is malformed")
     scenario_audit_errors, family_counts = scenario_errors(
-        episode_rows, args.v16_task_version
+        episode_rows, args.v16_task_version,
+        v16_count_expected, families_expected,
     )
     errors.extend(scenario_audit_errors)
 
@@ -203,10 +254,10 @@ def audit(args):
         video_streams[camera] = {"file_count": len(paths), "frame_count": frame_count}
 
     dataset = LeRobotDataset(repo_id=args.repo_id, root=root, video_backend="pyav")
-    if dataset.num_episodes != 256 or len(dataset) != info.get("total_frames"):
+    if dataset.num_episodes != total_expected or len(dataset) != info.get("total_frames"):
         errors.append("LeRobotDataset length mismatch")
     decoded = []
-    for episode_index in SAMPLED_EPISODES:
+    for episode_index in sampled_episodes:
         row = episode_rows[episode_index]
         start = int(row["dataset_from_index"])
         stop = int(row["dataset_to_index"])
@@ -240,7 +291,7 @@ def audit(args):
         "state_dim": 18,
         "action_dim": 18,
         "video_streams": video_streams,
-        "sampled_episodes": list(SAMPLED_EPISODES),
+        "sampled_episodes": list(sampled_episodes),
         "decoded_sample_count": len(decoded),
         "errors": errors,
         "passed": not errors,

@@ -1,10 +1,20 @@
 # π0.5 棒状物搬运任务：第一性原理数据扩充方案
 
-> 状态：执行中；v2 完整轨迹 16/16 通过，混合数据集审计与 5-step 预检通过，正在运行 3k canary
-> 日期：2026-08-28
+> 状态：4×RTX 4090 数据阶段已完成；v93 的 80/80 回合、mixed320 构建与审计、采样权重审计和 π0.5 data-check/config dry-run 均已通过。可切换到 4×H100 执行最后的全参数 fresh/resume canary；尚未启动正式训练
+> 日期：2026-08-29
 > 适用范围：当前 CRUZR MuJoCo `sorting_roll_v15` 三相机、18 维状态/动作、30 Hz 的 π0.5 行为克隆任务
 
 ## 当前执行状态
+
+- 最终分配真值固定为不可变清单 `sorting_roll_v16_stage80_20260829_v51_safe_fast_nav/campaign_manifest.json`；H/T/R/C 配额为 20/20/28/12。
+- 最终候选源为 `sorting_roll_v16_stage80_20260829_v93_final_v51_manifest`；只允许该版本通过 validator 后进入 mixed320，v51–v92 均只作诊断证据。
+- 腕部 D405 保持参与真实碰撞检查；H/T/R 使用 −75 mm 架前通道并在 0.970 m 高位送入，进入一体式槽后再下降；C 类保持专用 −60 mm 路径。
+- C 类干扰棒按圆柱对称性验证：平移与速度阈值不变，旋转采用无向长轴夹角；同时保留完整四元数旋转角用于审计。
+- 短棒边界场景只把左手平抓偏移从默认 34 mm 调到 31 mm；H/T/R 架前下降位后移到 75 mm，水平送入高度为 0.970 m，C 保持原 0.958 m 路径。
+- 最终 validator 为 80/80：双手夹持、D405 外壳净距、前沿送入、真实槽位接触、松手稳定 2 秒、撤臂和 60 秒时限均通过；报告位于 `cruzr_mujoco_sim/out/collection/sorting_roll_v16_stage80_20260829_v93_final_v51_manifest/validation_report_all_20260829T043742Z.json`。
+- mixed320 已由旧 v15 240 回合加 v16 80 回合构建完成：LeRobot v3.0 共 320 回合、478,778 帧，train/val/test=304/8/8；三路 RGB 为 224×224@30 FPS，state/action 为 18 维 float32，审计 `errors=[]`、`passed=true`。
+- 训练集逐帧采样权重 old/H/T/R/C=50/15/15/15/5 已通过质量与 SHA-256 审计；`data_training_readiness.json` 为 `ready_for_full_parameter_canary=true`，π0.5 data-check/config dry-run 均退出码 0。
+- 当前已达到“可切换到 4×H100 做全参数 canary”的状态。只有 4×H100 hardware-check、fresh 200 step、resume 到 250 step 和 canary audit 全部通过后，才允许启动正式训练。
 
 - 旧 v1 pilot 的 16/16 源数据和格式审计虽通过，但 T/R 是使用完整任务指令的中途终止轨迹；该数据集不再作为扩量依据。
 - 匹配 3k canary 的固定 12 场景结果为：original/control/treatment 严格双手抓持 7/8/11，稳定抬升 0/0/1，端到端成功均为 0，故旧 treatment 未通过绝对门槛。

@@ -10,6 +10,8 @@ V15_CAMPAIGN=sorting_roll_v15_diverse300_20260826_8x4090
 V16_CAMPAIGN=${SORTING_ROLL_V16_SOURCE_CAMPAIGN:-sorting_roll_v16_pilot_20260828_v3}
 V16_TASK_VERSION=${SORTING_ROLL_V16_TASK_VERSION:-sorting_roll_v16_expansion_pilot_sim}
 SAMPLING_PROFILE=${SORTING_ROLL_V16_SAMPLING_PROFILE:-pilot_old50}
+TRAIN_EPISODES=${SORTING_ROLL_V16_TRAIN_EPISODES:-0:252}
+CANDIDATE_STAGE=${SORTING_ROLL_V16_CANDIDATE_STAGE:-v16_pilot_16}
 DATASET_V21=$SIM_ROOT/out/datasets/${CAMPAIGN}_lerobot_v21
 DATASET_V30=$SIM_ROOT/out/datasets/${CAMPAIGN}_lerobot_v30
 LOG_ROOT=$PROJECT_ROOT/log/$CAMPAIGN
@@ -20,6 +22,8 @@ if [[ $SAMPLING_PROFILE == pilot_old50 ]]; then
   SAMPLING_TAG=old50_h15_t15_r20
 elif [[ $SAMPLING_PROFILE == full_v2_old70 ]]; then
   SAMPLING_TAG=old70_h10_t10_r10
+elif [[ $SAMPLING_PROFILE == stage80_old50 ]]; then
+  SAMPLING_TAG=old50_h15_t15_r15_c5
 else
   echo "unsupported sampling profile: $SAMPLING_PROFILE" >&2
   exit 2
@@ -68,25 +72,26 @@ PYTHONPATH=. "$ISAAC_PY" \
   "$SIM_ROOT/scripts/training/sorting_roll_v16_sampling_weights.py" \
   --dataset "$DATASET_V30" \
   --repo-id "$REPO_ID" \
-  --episodes 0:252 \
+  --episodes "$TRAIN_EPISODES" \
   --output "$SAMPLING_WEIGHTS" \
   --report "$SAMPLING_REPORT" \
   --profile "$SAMPLING_PROFILE" \
   >"$LOG_ROOT/sampling_weights.log" 2>&1
 
 "$ISAAC_PY" - "$DATASET_V21" "$DATASET_V30" "$REPO_ID" \
-  "$BUILD_REPORT" "$AUDIT_REPORT" "$SAMPLING_REPORT" "$READINESS" <<'PY'
+  "$BUILD_REPORT" "$AUDIT_REPORT" "$SAMPLING_REPORT" "$READINESS" \
+  "$CANDIDATE_STAGE" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-v21, v30, repo_id, build_path, audit_path, sampling_path, output_path = sys.argv[1:]
+v21, v30, repo_id, build_path, audit_path, sampling_path, output_path, stage = sys.argv[1:]
 build = json.loads(Path(build_path).read_text(encoding="utf-8"))
 audit = json.loads(Path(audit_path).read_text(encoding="utf-8"))
 sampling = json.loads(Path(sampling_path).read_text(encoding="utf-8"))
 payload = {
     "schema_version": 1,
-    "candidate_stage": "v16_pilot_16",
+    "candidate_stage": stage,
     "dataset_v21": v21,
     "dataset_v30": v30,
     "repo_id": repo_id,
@@ -103,7 +108,7 @@ payload = {
         build.get("passed") is True
         and audit.get("passed") is True
         and sampling.get("passed") is True
-        and audit.get("episodes") == 256
+        and audit.get("episodes") == build.get("total_count")
     ),
 }
 output = Path(output_path)

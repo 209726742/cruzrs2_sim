@@ -3,6 +3,8 @@ from pathlib import Path
 import sys
 import unittest
 
+import numpy as np
+
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 COLLECTION_DIR = PACKAGE_ROOT / "scripts" / "collection"
@@ -47,6 +49,28 @@ def valid_transform_report():
 
 
 class SortingRollV16ValidateTests(unittest.TestCase):
+    def test_grasp_to_lift_transition_accepts_replan_reachable_lift(self):
+        phases = np.asarray(
+            ["horizontal_approach_and_grasp"] * 25
+            + ["lift_flat_from_pickup_support"] * 5
+        )
+        actions = np.ones((30, 16), dtype=float)
+        actions[10:, 14:16] = 0.0
+        report, errors = MODULE.grasp_to_lift_transition(phases, actions)
+        self.assertEqual(errors, [])
+        self.assertEqual(report["transition_frames"], 15)
+
+    def test_grasp_to_lift_transition_rejects_long_static_prefix(self):
+        phases = np.asarray(
+            ["horizontal_approach_and_grasp"] * 25
+            + ["lift_flat_from_pickup_support"] * 5
+        )
+        actions = np.ones((30, 16), dtype=float)
+        actions[:, 14:16] = 0.0
+        report, errors = MODULE.grasp_to_lift_transition(phases, actions)
+        self.assertEqual(report["transition_frames"], 25)
+        self.assertTrue(any("exceeds 20 frames" in error for error in errors))
+
     def test_valid_transform_passes(self):
         self.assertEqual(
             MODULE.transform_errors(

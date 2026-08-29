@@ -87,7 +87,7 @@ def audit(args):
         "freeze_vision_encoder": False,
         "use_peft": False,
         "train_expert_only": False,
-        "optimizer_lr": 2.5e-5,
+        "optimizer_lr": args.expected_learning_rate,
     }
     for key, value in policy_expected.items():
         if policy.get(key) != value:
@@ -144,7 +144,7 @@ def audit(args):
 
     report = {
         "schema_version": 1,
-        "task_version": "sorting_roll_v15_diverse_sim",
+        "task_version": args.task_version,
         "output": str(args.output.resolve()),
         "dataset": str(args.dataset.resolve()),
         "checkpoints": checkpoints,
@@ -180,6 +180,10 @@ def parse_args():
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument(
+        "--task-version", default="sorting_roll_v15_diverse_sim"
+    )
+    parser.add_argument("--expected-learning-rate", type=float, default=2.5e-5)
     return parser.parse_args()
 
 

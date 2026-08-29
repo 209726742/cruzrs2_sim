@@ -13,16 +13,17 @@ V15_MANIFEST=$SIM_ROOT/output/sorting_roll_expert/sorting_roll_v15_diverse300_20
 EVAL_ROOT=${EVAL_ROOT:-$SIM_ROOT/out/rollout/sorting_roll_v16_fixed12_matched_20260828}
 V16_MANIFEST=$EVAL_ROOT/fixed_v16_manifest.json
 REPORT=$EVAL_ROOT/fixed12_audit.json
-LOG=$PROJECT_ROOT/log/sorting_roll_v16_fixed12_matched_20260828.log
-SESSION=sorting_roll_v16_fixed12
+LOG=${FIXED12_LOG:-$PROJECT_ROOT/log/sorting_roll_v16_fixed12_matched_20260828.log}
+SESSION=${FIXED12_SESSION:-sorting_roll_v16_fixed12}
 POLICY_SEED=${POLICY_SEED:-28000}
 REPLAN=${REPLAN:-20}
+RUN_LABELS=${FIXED12_RUN_LABELS:-"original36 control3k treatment3k"}
 
 LABELS=(original36 control3k treatment3k)
 CHECKPOINTS=(
   "$SIM_ROOT/out/training/pi05_sorting_roll_v15_h100x4_fullft28k_seed1000/checkpoints/036000/pretrained_model"
   "$SIM_ROOT/out/training/pi05_sorting_roll_v16_pilot_control_2x4090_expert3k/checkpoints/003000/pretrained_model"
-  "$SIM_ROOT/out/training/pi05_sorting_roll_v16_pilot_treatment_2x4090_expert3k/checkpoints/003000/pretrained_model"
+  "${FIXED12_TREATMENT_CHECKPOINT:-$SIM_ROOT/out/training/pi05_sorting_roll_v16_pilot_treatment_2x4090_expert3k/checkpoints/003000/pretrained_model}"
 )
 PORTS=(8742 8743 8744)
 GPUS=(0 1 2)
@@ -39,6 +40,10 @@ usage() {
 
 checkpoint_ready() {
   [[ -f $1/model.safetensors && -f $1/config.json ]]
+}
+
+label_enabled() {
+  [[ " $RUN_LABELS " == *" $1 "* ]]
 }
 
 generate_manifest() {
@@ -98,10 +103,13 @@ run_label() {
 
 run_all() {
   local index label checkpoint port gpu server_log
-  local -a server_pids=() worker_pids=()
+  local -A server_pids=()
+  local -a worker_pids=()
   mkdir -p "$EVAL_ROOT/logs" "$(dirname "$LOG")"
   exec > >(tee -a "$LOG") 2>&1
-  for checkpoint in "${CHECKPOINTS[@]}"; do
+  for index in "${!LABELS[@]}"; do
+    label_enabled "${LABELS[$index]}" || continue
+    checkpoint=${CHECKPOINTS[$index]}
     checkpoint_ready "$checkpoint" || {
       echo "checkpoint is incomplete: $checkpoint" >&2
       return 1
@@ -118,6 +126,7 @@ run_all() {
   trap cleanup EXIT INT TERM
 
   for index in "${!LABELS[@]}"; do
+    label_enabled "${LABELS[$index]}" || continue
     label=${LABELS[$index]}
     checkpoint=${CHECKPOINTS[$index]}
     port=${PORTS[$index]}
@@ -132,14 +141,16 @@ run_all() {
       --checkpoint "$checkpoint" --device cuda:0 --port "$port" \
       --cuda-memory-fraction 0.5 --default-policy-seed "$POLICY_SEED" \
       >"$server_log" 2>&1 &
-    server_pids+=("$!")
+    server_pids[$index]=$!
   done
   for index in "${!LABELS[@]}"; do
+    label_enabled "${LABELS[$index]}" || continue
     wait_for_server "${server_pids[$index]}" \
       "$EVAL_ROOT/logs/${LABELS[$index]}_server.log"
   done
 
   for index in "${!LABELS[@]}"; do
+    label_enabled "${LABELS[$index]}" || continue
     run_label "${LABELS[$index]}" "${CHECKPOINTS[$index]}" \
       "${PORTS[$index]}" &
     worker_pids+=("$!")

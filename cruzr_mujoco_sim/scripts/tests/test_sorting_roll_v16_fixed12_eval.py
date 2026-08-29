@@ -29,6 +29,8 @@ class SortingRollV16Fixed12EvalTests(unittest.TestCase):
         self.assertIn("tmux new-session -d", text)
         self.assertIn("seq 1 900", text)
         self.assertIn("PYTHONUNBUFFERED=1", text)
+        self.assertIn("FIXED12_RUN_LABELS", text)
+        self.assertIn("FIXED12_TREATMENT_CHECKPOINT", text)
 
     def test_rollout_uses_d405_contract_and_physical_stage_metrics(self):
         text = ROLLOUT.read_text(encoding="utf-8")

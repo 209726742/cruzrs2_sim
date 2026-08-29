@@ -44,6 +44,7 @@ from sorting_roll_expert import (
     FLAT_PICK_TARGET_ALONG_M,
     FLAT_PICK_TIP_BIAS_Y_M,
     GRASP_YAW_DEG,
+    GRASP_SETTLE_TICKS,
     INSERT_AXIS_X_SAFETY_LIMIT,
     INSERT_AXIS_Z_SAFETY_LIMIT,
     INSERT_AXIS_CORRECTION_MIN_CLEARANCE_M,
@@ -61,6 +62,7 @@ from sorting_roll_expert import (
     RELEASE_OPEN_BACKOFF_STEP_M,
     RELEASE_OPEN_CLEARANCE_LIFT_MAX_M,
     RELEASE_OPEN_INITIAL_BACKOFF_M,
+    RELEASE_NEAR_SHELF_GRIP_TARGET_M,
     RELEASE_PAD_SLIDING_FRICTION,
     RELEASE_PAD_SHELF_CLEARANCE_MIN_M,
     ROLL_RADIUS,
@@ -115,6 +117,9 @@ from sorting_roll_scene import (
 
 
 class SortingRollExpertTest(unittest.TestCase):
+    def test_grasp_settle_reaches_lift_within_replan_window(self):
+        self.assertEqual(GRASP_SETTLE_TICKS, 20)
+
     def test_release_sequence_keeps_strict_contact_gate(self):
         clear = {"force_n": 0.0, "pads": []}
         touching = {"force_n": 1.2, "pads": ["L_pad1"]}
@@ -127,6 +132,73 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertAlmostEqual(angle(3.0 * math.pi), -math.pi)
         self.assertAlmostEqual(angle(-3.0 * math.pi), -math.pi)
         self.assertAlmostEqual(angle(0.25), 0.25)
+
+    def test_go_to_supports_bounded_yaw_rate_override(self):
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        method = source[
+            source.index("    def go_to("):
+            source.index("    def reverse(")
+        ]
+        self.assertIn("max_yaw_rate=BASE_MAX_YAW_RATE", method)
+        self.assertIn("max_rate=max_yaw_rate", method)
+        self.assertIn("yaw_cap = min(\n                max_yaw_rate,", method)
+
+    def test_release_stage_center_tolerance_can_be_versioned(self):
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        execute = source[source.index("    def execute("):]
+        self.assertIn('"release_stage_center_tolerance_m"', execute)
+        self.assertEqual(execute.count("stage_center_tolerance,"), 3)
+
+    def test_release_descent_can_bound_each_axis_independently(self):
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        method = source[
+            source.index("    def align_roll_center("):
+            source.index("    def roll_axis(")
+        ]
+        self.assertIn("axis_step_limits=None", method)
+        self.assertIn("np.clip(", method)
+        execute = source[source.index("    def execute("):]
+        self.assertIn('"release_clearance_axis_step_limits_m"', execute)
+
+    def test_flat_pick_tip_bias_can_be_versioned(self):
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        method = source[
+            source.index("    def flat_pick_mount_poses("):
+            source.index("    def execute(")
+        ]
+        self.assertIn('"flat_pick_tip_bias_y_m"', method)
+        self.assertIn('"flat_pick_tip_bias_y_m_by_hand"', method)
+        self.assertIn("tip_bias_y_m_by_hand.get(hand, tip_bias_y_m)", method)
+
+    def test_release_clearance_height_can_be_versioned(self):
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        execute = source[source.index("    def execute("):]
+        self.assertIn('"release_clearance_roll_z_m"', execute)
+
+    def test_release_can_move_hands_outward_laterally(self):
+        source = (
+            COLLECTION_DIR / "sorting_roll_expert.py"
+        ).read_text(encoding="utf-8")
+        method = source[
+            source.index("    def release_into_integrated_top_tier("):
+            source.index("    def track_success(")
+        ]
+        self.assertIn('"release_lateral_step_m"', method)
+        self.assertIn('"release_lateral_max_steps"', method)
+        self.assertIn("max_steps = backoff_max_steps + lateral_max_steps", method)
+        self.assertIn('"l": np.array([0.0, lateral_step, 0.0])', method)
+        self.assertIn('"r": np.array([0.0, -lateral_step, 0.0])', method)
+        self.assertIn("release_lateral_steps", method)
 
     def test_bounded_vector_preserves_direction_and_limits_norm(self):
         vector = np.array([3.0, 4.0, 0.0])
@@ -949,6 +1021,10 @@ class SortingRollExpertTest(unittest.TestCase):
         self.assertEqual(RELEASE_OPEN_BACKOFF_STEP_M, 0.004)
         self.assertEqual(RELEASE_OPEN_BACKOFF_MAX_M, 0.050)
         self.assertEqual(RELEASE_OPEN_CLEARANCE_LIFT_MAX_M, 0.010)
+        self.assertIsNone(RELEASE_NEAR_SHELF_GRIP_TARGET_M)
+        self.assertIn("near_shelf_grip_target", release)
+        self.assertIn("near_shelf_partial_open_evidence", release)
+        self.assertIn("hands_fully_open_after_clearance_lift", release)
         self.assertIn("guarded_release_clear_confirmation", release)
         self.assertLess(
             release.index("guarded_release_clear_confirmation"),

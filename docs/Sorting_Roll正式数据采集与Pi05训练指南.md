@@ -1,5 +1,33 @@
 # Sorting Roll 正式数据采集与 π0.5 训练指南
 
+> v16 当前状态（2026-08-29）：采用固定 v51 manifest 的 H/T/R/C=20/20/28/12 扩充合同；最终源版本 `sorting_roll_v16_stage80_20260829_v93_final_v51_manifest` 已完成 80/80。mixed320 LeRobot v3.0、采样权重、data readiness 和 π0.5 data-check/config dry-run 均已通过。腕部 D405 参与真实碰撞检查；H/T/R 使用 −75 mm 架前通道并在 0.970 m 高位送入，C 类保持专用 −60 mm 路径。正式训练尚未启动；下一步是在 4×H100 上执行最后的全参数 fresh/resume canary。
+
+## v16 扩充数据准入
+
+- 只接受 v93 的 80 个成功回合；v51–v92 均为诊断数据，不得混入训练。
+- 数据集固定为 `sorting_roll_v16_stage80_mixed320_20260829`：旧 v15 240 个训练源加 v16 80 个 H/T/R/C 扩充源，最终切分为 train/val/test=304/8/8。
+- π0.5 输入固定为 `stereo_left + left_wrist_realsense + right_wrist_realsense` 三路 RGB，224×224@30 FPS；state/action 均为 18 维 float32。
+- v16 采样目标为 old/H/T/R/C=50/15/15/15/5；必须使用生成并审计通过的逐帧采样权重。
+- 正式训练前依次要求：80/80 validator 通过、mixed320 v2.1/v3.0 构建与审计通过、data readiness 通过、4×H100 hardware-check、200-step fresh canary、resume 到 250 step、canary audit 通过。
+- 全参数训练固定 `train_expert_only=false`、BF16、gradient checkpointing、每卡 batch 16、有效 batch 64、学习率 1e-5，并从 v15 36k 模型权重开始新的 optimizer/scheduler；不得恢复旧 36k optimizer。
+- 4×4090 数据与配置准入已完成：源 validator 80/80，mixed320 共 320 回合、478,778 帧，v3.0 审计 `errors=[]`、`passed=true`，readiness 为 `true`，data-check/config dry-run 均退出码 0。
+- 当前没有训练任务运行。没有 4×H100 时不执行硬件 canary，也不启动正式训练。
+
+切换到 4×H100 80GB 后，按顺序执行最后门禁：
+
+```bash
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v16_h100x4_fullft20h.sh hardware-check
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v16_h100x4_fullft20h.sh canary-dry-run
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v16_h100x4_fullft20h.sh tmux-canary
+# fresh 200 step 正常结束后
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v16_h100x4_fullft20h.sh tmux-canary-resume
+# resume 到 250 step 正常结束后
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v16_h100x4_fullft20h.sh canary-audit
+bash cruzr_mujoco_sim/scripts/training/pi05_sorting_roll_v16_h100x4_fullft20h.sh dry-run
+```
+
+只有最后一条 `dry-run` 通过，才达到正式训练启动门；届时使用 `tmux-start`，中断后使用 `tmux-resume`。本阶段不得提前执行这两条命令。
+
 > 状态：2026-08-27。v15 数据流水线已完成并通过准入。暂存点后移 10 mm 后，最终 5×20 fresh 准入分别为 19/20、20/20、18/20、20/20、20/20，所有组均达到至少 18/20；正式首轮采集 293/300 成功，7 个同配额补采全部成功，最终选择 300 个唯一成功回合。源 validator 为 300/300，LeRobot v3.0 审计为 `passed=true`、`errors=[]`。4×H100 全参数 fresh/resume canary 已通过，28,000-step 训练已正常完成；42k 延长在 step 41,146 附近按用户要求停止，最近完整 checkpoint 为 `041000`。
 
 > 4×H100 执行状态：训练已停止，tmux 与训练进程均已退出，四卡显存已释放。`041000` 包含完整的模型、优化器、scheduler 和 RNG 状态；未生成 `042000`，41,000 之后未保存的约 146 步不作为可恢复证据。

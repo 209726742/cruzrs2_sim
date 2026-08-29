@@ -5,7 +5,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
+import tempfile
 import time
 
 import numpy as np
@@ -219,6 +219,31 @@ def task_robot_xml(base_robot_xml):
     return result
 
 
+def atomic_write_bytes(destination, payload):
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if destination.read_bytes() == payload:
+            return
+    except FileNotFoundError:
+        pass
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, destination)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
 def materialize_scene(destination=SCENE_PATH):
     missing = [str(path) for path in required_assets() if not path.is_file()]
     if missing:
@@ -226,8 +251,11 @@ def materialize_scene(destination=SCENE_PATH):
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     task_robot_path = destination.parent / TASK_ROBOT_PATH.name
-    task_robot_path.write_text(task_robot_xml(BASE_ROBOT_PATH.read_text()))
-    shutil.copyfile(TEMPLATE_PATH, destination)
+    atomic_write_bytes(
+        task_robot_path,
+        task_robot_xml(BASE_ROBOT_PATH.read_text()).encode("utf-8"),
+    )
+    atomic_write_bytes(destination, TEMPLATE_PATH.read_bytes())
     return destination
 
 
