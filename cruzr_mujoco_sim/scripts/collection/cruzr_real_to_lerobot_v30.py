@@ -55,6 +55,26 @@ ACTION_NAMES = (
     *(f"{name}_position_command" for name in LIFTER_JOINTS),
 )
 
+TRAINING_FEATURE_NAMES = {
+    "observation.state": STATE_NAMES,
+    "action": ACTION_NAMES,
+}
+GRIPPER_NORMALIZATION_BOUNDS = {
+    "left_gripper_open_fraction": (0.0, 1.0),
+    "right_gripper_open_fraction": (0.0, 1.0),
+    "left_gripper_open_fraction_command": (0.0, 1.0),
+    "right_gripper_open_fraction_command": (0.0, 1.0),
+}
+TRAINING_QUANTILES = {
+    "q01": 0.01,
+    "q10": 0.10,
+    "q50": 0.50,
+    "q90": 0.90,
+    "q99": 0.99,
+}
+NORMALIZATION_EPS = 1e-8
+MAX_ABS_NORMALIZED = 5.0
+
 CAMERAS = {
     "observation.images.base_0_rgb": "sensor_camera_stereo_color_raw",
     "observation.images.left_wrist_0_rgb": "sensor_camera_wrist_left_color_raw",
@@ -630,6 +650,99 @@ def write_progress(path, progress):
     temporary.replace(path)
 
 
+def stable_training_quantiles(values, names):
+    quantiles = {
+        key: np.quantile(values, probability, axis=0)
+        for key, probability in TRAINING_QUANTILES.items()
+    }
+    lower = quantiles["q01"].copy()
+    upper = quantiles["q99"].copy()
+    minimum = values.min(axis=0)
+    maximum = values.max(axis=0)
+
+    collapsed = np.isclose(lower, upper, rtol=0.0, atol=1e-6)
+    lower[collapsed] = minimum[collapsed]
+    upper[collapsed] = maximum[collapsed]
+    for index, name in enumerate(names):
+        if name in GRIPPER_NORMALIZATION_BOUNDS:
+            lower[index], upper[index] = GRIPPER_NORMALIZATION_BOUNDS[name]
+
+    denominator = np.where(upper == lower, NORMALIZATION_EPS, upper - lower)
+    normalized_minimum = 2.0 * (minimum - lower) / denominator - 1.0
+    normalized_maximum = 2.0 * (maximum - lower) / denominator - 1.0
+    unstable = np.maximum(np.abs(normalized_minimum), np.abs(normalized_maximum)) > (
+        MAX_ABS_NORMALIZED
+    )
+    lower[unstable] = minimum[unstable]
+    upper[unstable] = maximum[unstable]
+    quantiles["q01"] = lower
+    quantiles["q99"] = upper
+    return quantiles
+
+
+def load_training_arrays(dataset_root):
+    import pyarrow.parquet as parquet
+
+    paths = sorted((dataset_root / "data").glob("chunk-*/file-*.parquet"))
+    if not paths:
+        raise ValueError(f"no parquet data files found under {dataset_root}")
+    arrays = {}
+    for feature in TRAINING_FEATURE_NAMES:
+        arrays[feature] = np.concatenate(
+            [
+                np.asarray(parquet.read_table(path, columns=[feature])[feature].to_pylist())
+                for path in paths
+            ]
+        )
+    return arrays
+
+
+def normalization_max_abs(values, lower, upper):
+    denominator = np.where(upper == lower, NORMALIZATION_EPS, upper - lower)
+    normalized = 2.0 * (values - lower) / denominator - 1.0
+    return float(np.max(np.abs(normalized)))
+
+
+def rewrite_training_quantiles(dataset_root):
+    stats_path = dataset_root / "meta" / "stats.json"
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    arrays = load_training_arrays(dataset_root)
+    report = {}
+    for feature, names in TRAINING_FEATURE_NAMES.items():
+        quantiles = stable_training_quantiles(arrays[feature], names)
+        for key, values in quantiles.items():
+            stats[feature][key] = values.tolist()
+        report[feature] = normalization_max_abs(
+            arrays[feature], quantiles["q01"], quantiles["q99"]
+        )
+    temporary = stats_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    temporary.replace(stats_path)
+    return report
+
+
+def audit_training_quantiles(dataset_root, stored_stats):
+    arrays = load_training_arrays(dataset_root)
+    report = {}
+    for feature, names in TRAINING_FEATURE_NAMES.items():
+        expected = stable_training_quantiles(arrays[feature], names)
+        for key in TRAINING_QUANTILES:
+            if not np.allclose(
+                stored_stats[feature][key], expected[key], rtol=1e-6, atol=1e-8
+            ):
+                raise ValueError(f"{feature} {key} is not based on stable global quantiles")
+        report[feature] = normalization_max_abs(
+            arrays[feature], expected["q01"], expected["q99"]
+        )
+        if report[feature] > MAX_ABS_NORMALIZED + 1e-6:
+            raise ValueError(
+                f"{feature} normalized maximum {report[feature]:.3f} exceeds "
+                f"{MAX_ABS_NORMALIZED:.1f}"
+            )
+    return report
+
+
+
 def add_info_metadata(dataset, source_count, task):
     from src.lerobot.datasets.utils import write_info
 
@@ -638,7 +751,8 @@ def add_info_metadata(dataset, source_count, task):
             "source_format": "cruzr_s2_ros2_mcap_and_timestamped_jpeg",
             "source_task": task,
             "total_source_episodes": source_count,
-            "conversion_profile": "cruzr_real_full_body_22d_v1",
+            "conversion_profile": "cruzr_real_full_body_22d_v2",
+            "normalization_profile": "exact_global_quantiles_with_stable_physical_bounds_v1",
             "policy_image_map": {
                 "observation/image": "observation.images.base_0_rgb",
                 "observation/left_wrist_image": "observation.images.left_wrist_0_rgb",
@@ -733,9 +847,11 @@ def convert(args):
     dataset = open_dataset(args, create=False)
     add_info_metadata(dataset, len(sources), args.task)
     dataset.finalize()
+    normalization_report = rewrite_training_quantiles(dataset.root)
     print(
         f"[complete] episodes={dataset.meta.total_episodes} "
-        f"frames={dataset.meta.total_frames} output={dataset.root}",
+        f"frames={dataset.meta.total_frames} output={dataset.root} "
+        f"normalization_max_abs={normalization_report}",
         flush=True,
     )
 
@@ -760,6 +876,7 @@ def audit(args):
     for feature in ("observation.state", "action"):
         if not {"q01", "q99"}.issubset(dataset.meta.stats[feature]):
             raise ValueError(f"missing quantile stats for {feature}")
+    normalization_report = audit_training_quantiles(dataset.root, dataset.meta.stats)
     boundary_indices = {0, len(dataset) - 1}
     for episode in dataset.meta.episodes:
         boundary_indices.add(episode["dataset_from_index"])
@@ -806,7 +923,8 @@ def audit(args):
                 raise ValueError(f"video contract mismatch for {path}: {actual} != {expected}")
     print(
         f"[audit complete] episodes={dataset.meta.total_episodes} "
-        f"frames={dataset.meta.total_frames} cameras={list(CAMERAS)}",
+        f"frames={dataset.meta.total_frames} cameras={list(CAMERAS)} "
+        f"normalization_max_abs={normalization_report}",
         flush=True,
     )
 

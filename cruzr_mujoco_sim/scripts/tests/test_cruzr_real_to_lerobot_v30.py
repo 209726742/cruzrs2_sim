@@ -107,6 +107,35 @@ class CruzrRealToLeRobotV30Test(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "forward motion"):
             converter.build_state_action(synthetic_motion(equal_wheels=False))
 
+    def test_training_quantiles_are_global_and_stable(self):
+        common = np.linspace(-2.0, 3.0, 1000)
+        rare_outlier = np.concatenate([np.zeros(999), [100.0]])
+        gripper = np.concatenate([np.ones(999), [0.95]])
+        constant = np.zeros(1000)
+        values = np.stack([common, rare_outlier, gripper, constant], axis=1)
+
+        quantiles = converter.stable_training_quantiles(
+            values,
+            (
+                "joint",
+                "rare_joint",
+                "left_gripper_open_fraction_command",
+                "base_linear_velocity_command_mps",
+            ),
+        )
+
+        self.assertAlmostEqual(quantiles["q01"][0], np.quantile(common, 0.01))
+        self.assertAlmostEqual(quantiles["q99"][0], np.quantile(common, 0.99))
+        np.testing.assert_allclose(quantiles["q01"][1:], [0.0, 0.0, 0.0])
+        np.testing.assert_allclose(quantiles["q99"][1:], [100.0, 1.0, 0.0])
+        self.assertLessEqual(
+            converter.normalization_max_abs(
+                values, quantiles["q01"], quantiles["q99"]
+            ),
+            converter.MAX_ABS_NORMALIZED,
+        )
+
+
 
 if __name__ == "__main__":
     unittest.main()
